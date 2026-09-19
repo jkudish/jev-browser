@@ -192,6 +192,11 @@ function assertNoSecret(result, body) {
   ];
   for (const echo of echoes) {
     assert.ok(!haystack.includes(echo), `the password leaked into the tool result (${echo === SECRET ? "raw" : "encoded"})`);
+    // A slice taken before redaction would leave half a variant behind: check
+    // both halves of every representation as well as the whole.
+    const half = Math.ceil(echo.length / 2);
+    assert.ok(!haystack.includes(echo.slice(0, half)), `a prefix of the password leaked into the tool result`);
+    assert.ok(!haystack.includes(echo.slice(-half)), `a suffix of the password leaked into the tool result`);
   }
 }
 

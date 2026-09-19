@@ -122,6 +122,11 @@ test("validateSecretBuffer keeps exact bytes and rejects bad input", () => {
   assert.throws(() => validateSecretBuffer(Buffer.from("abc")), /shorter/);
   assert.throws(() => validateSecretBuffer(Buffer.from([0xff, 0xfe, 0xfd, 0xfc])), /UTF-8/);
   assert.throws(() => validateSecretBuffer(Buffer.concat([Buffer.from("abcdef"), Buffer.alloc(4096)])), /exceeds/);
+  // CR/LF can never be filled: password inputs strip them, so an echo of the
+  // stripped value would match no redaction variant.
+  assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\n")), /line break/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\r")), /line break/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("abc\r\ndef")), /line break/);
 });
 
 test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, deeply", () => {
@@ -153,6 +158,33 @@ test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, de
     const out = ent.redact(escaped);
     assert.ok(!out.includes(punct) && !out.includes(escaped), `variant ${chars} should be fully replaced`);
     assert.ok(out.includes(PASSWORD_REDACTED), `variant ${chars} should be replaced, not dropped`);
+  }
+
+  // Pages normalize whitespace when echoing into single-space contexts
+  // (collapsed DOM text, attributes): the normalized echo must still match.
+  const odd = "a  b\tc";
+  const norm = makeRedactor(odd);
+  const collapsed = odd.replace(/\s+/g, " ");
+  assert.notEqual(collapsed, odd); // the echo really is a different string
+  const normOut = norm.redact(`x${collapsed}y`);
+  assert.ok(!normOut.includes(collapsed), "normalized echo is fully replaced");
+  assert.ok(normOut.includes(PASSWORD_REDACTED), "normalized echo is replaced, not dropped");
+
+  // Markdown renderers backslash-escape punctuation: an echo inside rendered
+  // markdown shows the escaped form.
+  const md = "a*b_c[d]";
+  const mdr = makeRedactor(md);
+  const mdEcho = md.replace(/([\\`*_\[\]])/g, "\\$1");
+  assert.ok(!mdr.redact(`lead ${mdEcho} tail`).includes(mdEcho));
+  assert.ok(mdr.redact(`lead ${mdEcho} tail`).includes(PASSWORD_REDACTED));
+
+  // Capture windows are sized from the longest variant: every representation
+  // the redactor can name must fit whole inside visible-limit + maxVariantLength.
+  for (const s of [secret, spaced, punct, odd, md]) {
+    const r = makeRedactor(s);
+    assert.ok(r.maxVariantLength >= s.length, "raw secret is itself a variant");
+    assert.ok(r.maxVariantLength >= encodeURIComponent(s).length, "URL-encoded variant length is covered");
+    assert.ok(r.maxVariantLength >= [...s].map((c) => `&#${c.codePointAt(0)};`.length).reduce((a, b) => a + b, 0), "numeric entity variant length is covered");
   }
 });
 
@@ -205,13 +237,15 @@ test("readHandoffSecret rejects the attack shapes", async () => {
   await assert.rejects(() => readHandoffSecret(nestedFile, dir), /directly inside/);
 
   // A handoff directory that is itself a symlink to a valid-looking directory.
+  // The anchor is the symlink, so the basename-only containment rule passes
+  // and only the realpath check in ensureHandoffDir can catch it.
   const realDir = await mkdtemp(join(tmpdir(), "jev-real-"));
   await chmod(realDir, 0o700);
   const realFile = join(realDir, "pw");
   await writeFile(realFile, "super-secret-value", { mode: 0o600 });
   const linkedDir = join(dir, "linkeddir");
   await symlink(realDir, linkedDir);
-  await assert.rejects(() => readHandoffSecret(join(linkedDir, "pw"), dir), /absolute|inside/);
+  await assert.rejects(() => readHandoffSecret(join(linkedDir, "pw"), linkedDir), /not a directory|symlink-free/);
   await rm(realDir, { recursive: true, force: true });
 
   const linked = join(dir, "linked");

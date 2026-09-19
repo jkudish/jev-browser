@@ -21,7 +21,7 @@ import {
   selectorFor,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
-import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, MAX_SECRET_BYTES, type Redactor } from "./password.js";
+import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, type Redactor } from "./password.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
@@ -205,9 +205,18 @@ async function generateTextToType(
 }
 
 // ── Extraction: DOM-first (a11y trees under-report inputs) ───────────────────
-async function extractAndStamp(page: Page, bounded: (cap: number) => number, captureCap = 512): Promise<RawElement[]> {
+export interface CaptureCaps {
+  label: number;
+  option: number;
+  href: number;
+}
+// Non-credential defaults preserve the original extraction semantics exactly:
+// labels capped at 80 (the noise-name threshold), hrefs and option labels
+// uncapped in practice.
+const DEFAULT_CAPTURE_CAPS: CaptureCaps = { label: 80, option: 1_000_000, href: 1_000_000 };
+async function extractAndStamp(page: Page, bounded: (cap: number) => number, caps: CaptureCaps = DEFAULT_CAPTURE_CAPS): Promise<RawElement[]> {
   return page.evaluate(
-    (cap: number) => {
+    (cap: CaptureCaps) => {
       // Clear stamps from previous steps first: elements that dropped out of
       // the candidate list keep their old data-jev-id, which would make
       // selectors match more than one element.
@@ -255,7 +264,7 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number, cap
             el.textContent ||
             "",
         );
-        const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap) : "";
+        const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap.href) : "";
         const clickable =
           ["a", "button"].includes(tag) ||
           ["button", "link"].includes(roleAttr) ||
@@ -274,14 +283,14 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number, cap
         const options =
           tag === "select"
             ? Array.from((el as unknown as HTMLSelectElement).options)
-                .map((o) => (o.label || o.value || "").trim().slice(0, cap))
+                .map((o) => (o.label || o.value || "").trim().slice(0, cap.option))
                 .filter(Boolean)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
       }
       return out;
-    }, captureCap);
+    }, caps);
 }
 
 interface Observables {
@@ -381,12 +390,16 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     redactor = makeRedactor(options.password.value);
   }
   const R = (s: string): string => redactor?.redact(s) ?? s;
-  // Credential runs capture longer strings in-page so that host-side
-  // redaction sees the whole echo before any display cap slices it: a
-  // password can be up to MAX_SECRET_BYTES long, and a slice taken before
-  // redaction would keep a prefix of it.
-  const captureCap = redactor ? MAX_SECRET_BYTES + 64 : 512;
-  const excerptCap = redactor ? MAX_SECRET_BYTES + 64 : 1500;
+  // Credential runs size each capture window as visible limit + the longest
+  // secret representation, so an echo that starts inside the visible window
+  // is always captured whole: redaction sees the complete variant before any
+  // display slice, and no prefix of the value can survive the boundary.
+  // Non-credential runs keep the original extraction semantics.
+  const maxVariant = redactor?.maxVariantLength ?? 0;
+  const captureCaps = redactor
+    ? { label: 80 + maxVariant, option: 120 + maxVariant, href: 120 + maxVariant }
+    : DEFAULT_CAPTURE_CAPS;
+  const excerptCap = redactor ? STATE_EXCERPT_CHARS + maxVariant : STATE_EXCERPT_CHARS;
 
   const steps: StepRecord[] = [];
   const consoleEvents: ConsoleEvent[] = [];
@@ -462,7 +475,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         break;
       }
 
-      const raw = await extractAndStamp(page, bounded, captureCap);
+      const raw = await extractAndStamp(page, bounded, captureCaps);
       // A page that already holds the value can echo it into any extracted
       // string (labels, hrefs, option text). Scrub host-side before the
       // action space or any model-facing state is built from these.
@@ -691,7 +704,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     try {
       payload = await extractPayload(page, format, maxChars, bounded, R);
     } catch (error) {
-      extractionProblems.push(R(`page payload: ${(error as Error).message.slice(0, 160)}`));
+      // Redact the full message at push time; the display slice happens at
+      // result assembly, after redaction, so no prefix of an echoed value can
+      // survive the 160-char boundary.
+      extractionProblems.push(R(`page payload: ${(error as Error).message}`));
     }
     if (screenshot === "final") {
       if (credentialUsed) {
@@ -702,7 +718,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           const buffer = await page.screenshot({ type: "jpeg", quality: 70, timeout: bounded(10_000) });
           screenshotBase64 = buffer.toString("base64");
         } catch (error) {
-          extractionProblems.push(`screenshot: ${(error as Error).message.slice(0, 160)}`);
+          extractionProblems.push(R(`screenshot: ${(error as Error).message}`));
         }
       }
     }
@@ -717,7 +733,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       format,
       max_chars: maxChars,
       page: payload,
-      extraction_problems: extractionProblems.length ? extractionProblems.map(R) : undefined,
+      extraction_problems: extractionProblems.length ? extractionProblems.map(R).map((s) => s.slice(0, 160)) : undefined,
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
@@ -777,7 +793,10 @@ async function extractPayload(
     content = await page.locator("body").ariaSnapshot({ timeout: bounded(10_000) });
   } else if (format === "markdown") {
     const html = await page.evaluate(() => document.body?.innerHTML ?? "");
-    content = turndown.turndown(html);
+    // Redact the source HTML before conversion: entity and attribute forms
+    // of an echoed value exist in the DOM string, not the markdown output,
+    // and turndown can mangle them past the redactor's patterns.
+    content = turndown.turndown(redact(html));
   } else {
     content = await page.evaluate(() => document.body?.innerText ?? "");
   }

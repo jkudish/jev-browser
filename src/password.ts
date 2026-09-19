@@ -89,6 +89,11 @@ export function validateSecretBuffer(buf: Buffer, label = "password"): string {
     throw new Error(`${label} is not valid UTF-8 text`);
   }
   if (text.includes("\u0000")) throw new Error(`${label} contains a NUL byte`);
+  // Native password inputs run the value sanitization algorithm: CR and LF
+  // are stripped on assignment. A secret containing them could never be
+  // filled faithfully, and a page echoing the stripped value back would
+  // produce a string no redaction variant matches. Reject up front.
+  if (/[\r\n]/.test(text)) throw new Error(`${label} contains a line break; password inputs strip CR/LF, so it could never be filled (produce it without the trailing newline, e.g. op read --no-newline)`);
   // Code points, not UTF-16 units: two emoji must not count as four characters.
   if ([...text].length < MIN_SECRET_CHARS) throw new Error(`${label} is shorter than ${MIN_SECRET_CHARS} characters`);
   return text;
@@ -159,7 +164,14 @@ export async function readHandoffSecret(path: string, dir = handoffDir()): Promi
     }
     return buf.subarray(0, read);
   } catch (error) {
-    if (!unlinked) await unlink(resolvedPath).catch(() => {}); // one-shot even on failure
+    // One-shot even on failure, but only when the pathname still names the
+    // inode we pinned: a replacement race must not make us delete the
+    // replacement, which is somebody else's file.
+    const cur = await lstat(resolvedPath).catch(() => null);
+    const pinned = await fh.stat().catch(() => null);
+    if (cur && pinned && cur.ino === pinned.ino && cur.dev === pinned.dev && !unlinked) {
+      await unlink(resolvedPath).catch(() => {});
+    }
     throw error;
   } finally {
     await fh.close().catch(() => {});
@@ -209,6 +221,13 @@ export function assertNoPlaywrightDebug(): void {
 export interface Redactor {
   redact(s: string): string;
   redactDeep(value: unknown): any;
+  /**
+   * Length of the longest known representation of the secret. Capture
+   * windows on credential runs are sized from this (visible limit + this
+   * value), so an echo that starts inside the visible window is always
+   * captured whole and can be redacted before any display slice.
+   */
+  maxVariantLength: number;
 }
 
 /**
@@ -236,6 +255,15 @@ export function makeRedactor(secret: string): Redactor {
   variants.add(esc('&<>"\''));
   variants.add(Array.from(secret, (c) => `&#${c.codePointAt(0)!};`).join(""));
   variants.add(Array.from(secret, (c) => `&#x${c.codePointAt(0)!.toString(16)};`).join(""));
+  // Markdown: Turndown escapes its special characters with a backslash, so
+  // a secret containing one comes back as `ab\*cd` in markdown output.
+  variants.add(secret.replace(/([\\`*_[\]])/g, "\\$1"));
+  // Page-side pipelines normalize whitespace before we see the string:
+  // label resolution collapses runs and trims, excerpts collapse, option
+  // labels trim. The normalized echo of the secret is its own variant.
+  for (const v of Array.from(variants)) {
+    if (/\s/.test(v)) variants.add(v.replace(/\s+/g, " ").trim());
+  }
   const ordered = Array.from(variants)
     .filter((v) => v.length >= MIN_SECRET_CHARS)
     .sort((a, b) => b.length - a.length);
@@ -254,7 +282,7 @@ export function makeRedactor(secret: string): Redactor {
     }
     return value;
   };
-  return { redact, redactDeep };
+  return { redact, redactDeep, maxVariantLength: ordered[0]?.length ?? 0 };
 }
 
 /** Reads a secret from an arbitrary local path (CLI only; the caller is human). */
