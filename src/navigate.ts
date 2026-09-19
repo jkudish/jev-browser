@@ -21,10 +21,13 @@ import {
   selectorFor,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
-import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, type Redactor } from "./password.js";
+import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
+// Display limits on credential runs: what model-facing strings may show.
+// Capture windows are these plus the longest secret representation.
+const CREDENTIAL_VISIBLE = { label: 80, option: 120, href: 120 };
 
 export interface NavigateOptions {
   task: string;
@@ -214,9 +217,14 @@ export interface CaptureCaps {
 // labels capped at 80 (the noise-name threshold), hrefs and option labels
 // uncapped in practice.
 const DEFAULT_CAPTURE_CAPS: CaptureCaps = { label: 80, option: 1_000_000, href: 1_000_000 };
-async function extractAndStamp(page: Page, bounded: (cap: number) => number, caps: CaptureCaps = DEFAULT_CAPTURE_CAPS): Promise<RawElement[]> {
+async function extractAndStamp(
+  page: Page,
+  bounded: (cap: number) => number,
+  caps: CaptureCaps = DEFAULT_CAPTURE_CAPS,
+  includePasswordInputs = false,
+): Promise<RawElement[]> {
   return page.evaluate(
-    (cap: CaptureCaps) => {
+    ({ cap, includePw }: { cap: CaptureCaps; includePw: boolean }) => {
       // Clear stamps from previous steps first: elements that dropped out of
       // the candidate list keep their old data-jev-id, which would make
       // selectors match more than one element.
@@ -276,21 +284,28 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number, cap
         const selectable = tag === "select";
         // Password inputs are excluded from typeable by design; they are
         // stamped separately so credential runs can offer fill_password.
+        // Without a password source they are skipped entirely: they never
+        // crowd the candidate budget on ordinary runs.
         const passwordInput = tag === "input" && typeAttr === "password";
-        if (!clickable && !typeable && !selectable && !passwordInput) continue;
+        if (!clickable && !typeable && !selectable && !(passwordInput && includePw)) continue;
         const attr = `j${out.length + 1}`;
         el.setAttribute("data-jev-id", attr);
         const options =
           tag === "select"
             ? Array.from((el as unknown as HTMLSelectElement).options)
-                .map((o) => (o.label || o.value || "").trim().slice(0, cap.option))
-                .filter(Boolean)
+                // Keep each option's live DOM index alongside its label:
+                // selection happens by index, so a scrubbed or truncated
+                // label can never become the selection key.
+                .map((o, i) => ({ i, label: (o.label || o.value || "").trim().slice(0, cap.option) }))
+                .filter((o) => o.label.length > 0)
                 .slice(0, 200)
             : undefined;
         out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
       }
       return out;
-    }, caps);
+    },
+    { cap: caps, includePw: includePasswordInputs },
+  );
 }
 
 interface Observables {
@@ -379,6 +394,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // serialized string this run produces.
   let redactor: Redactor | null = null;
   let trustedOrigin: string | null = null;
+  let passwordValue: string | null = null;
   if (options.password) {
     const origin = parseTrustedOrigin(options.password.origin);
     if (!origin) {
@@ -387,9 +403,17 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     trustedOrigin = origin;
     assertNoPlaywrightDebug();
     if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with a password source");
-    redactor = makeRedactor(options.password.value);
+    // Validate here, not just in the CLI/MCP adapters: library callers call
+    // navigate() directly, and an invalid secret (CR/LF, below-minimum or
+    // normalization-collapsing length) could never be redacted reliably.
+    passwordValue = validateSecretBuffer(Buffer.from(options.password.value, "utf8"));
+    redactor = makeRedactor(passwordValue);
   }
   const R = (s: string): string => redactor?.redact(s) ?? s;
+  // The task itself is model-facing: if a caller ignored the docs and put the
+  // value in the task string, scrub it before any model or typing generator
+  // sees it, so "the model never sees the value" holds unconditionally.
+  const safeTask = R(task);
   // Credential runs size each capture window as visible limit + the longest
   // secret representation, so an echo that starts inside the visible window
   // is always captured whole: redaction sees the complete variant before any
@@ -397,7 +421,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // Non-credential runs keep the original extraction semantics.
   const maxVariant = redactor?.maxVariantLength ?? 0;
   const captureCaps = redactor
-    ? { label: 80 + maxVariant, option: 120 + maxVariant, href: 120 + maxVariant }
+    ? { label: CREDENTIAL_VISIBLE.label + maxVariant, option: CREDENTIAL_VISIBLE.option + maxVariant, href: CREDENTIAL_VISIBLE.href + maxVariant }
     : DEFAULT_CAPTURE_CAPS;
   const excerptCap = redactor ? STATE_EXCERPT_CHARS + maxVariant : STATE_EXCERPT_CHARS;
 
@@ -475,15 +499,18 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         break;
       }
 
-      const raw = await extractAndStamp(page, bounded, captureCaps);
+      const raw = await extractAndStamp(page, bounded, captureCaps, Boolean(options.password));
       // A page that already holds the value can echo it into any extracted
       // string (labels, hrefs, option text). Scrub host-side before the
-      // action space or any model-facing state is built from these.
+      // action space or any model-facing state is built from these, then
+      // re-apply the display limit: the capture window ran longer than the
+      // visible limit on purpose, and what survives redaction is safe but
+      // still longer than the model should see.
       if (redactor) {
         for (const el of raw) {
-          el.text = R(el.text);
-          el.href = R(el.href);
-          if (el.options) el.options = el.options.map((o) => R(o));
+          el.text = R(el.text).slice(0, CREDENTIAL_VISIBLE.label);
+          el.href = R(el.href).slice(0, CREDENTIAL_VISIBLE.href);
+          if (el.options) el.options = el.options.map((o) => ({ i: o.i, label: R(o.label).slice(0, CREDENTIAL_VISIBLE.option) }));
         }
       }
       const { elements, truncated } = buildActionSpace(raw, { passwordActive: allowTyping && Boolean(options.password) });
@@ -493,7 +520,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       // (scroll/back/done) plus the page excerpt. goal_done can and should
       // fire on terminal pages with no interactive elements.
       const state = {
-        task,
+        task: safeTask,
         current_page: { url: R(observables.url), title: R(observables.title) },
         page_text_excerpt: R(observables.excerpt).slice(0, STATE_EXCERPT_CHARS),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
@@ -576,7 +603,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           if (!allowTyping) {
             actionError = "typing disabled by caller";
           } else {
-            const generated = await generateTextToType(budget, task, element.description, R(page.url()));
+            const generated = await generateTextToType(budget, safeTask, element.description, R(page.url()));
             await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
             await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
@@ -587,15 +614,18 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           if (opts.length === 0) {
             actionError = "select had no options";
           } else {
+            // Labels are scrubbed and display-capped, so the model picks by
+            // label but selection happens by live DOM index: a scrubbed or
+            // truncated label can never become the selection key.
             const optionAnswer = await askJev(
               budget,
-              { task, page: { url: R(observables.url), title: R(observables.title) }, dropdown: element.description, options: opts },
-              { option: selectOptionQuestion(element.description, opts) },
+              { task: safeTask, page: { url: R(observables.url), title: R(observables.title) }, dropdown: element.description, options: opts.map((o) => o.label) },
+              { option: selectOptionQuestion(element.description, opts.map((o) => o.label)) },
             );
             const pickedIndex = Number((optionAnswer.option.choice as string).slice(1));
-            const label = opts[pickedIndex] ?? opts[0];
-            await page.selectOption(selectorFor(element), { label });
-            detail = `selected "${label}"`;
+            const opt = opts[pickedIndex] ?? opts[0];
+            await page.selectOption(selectorFor(element), { index: opt.i });
+            detail = `selected "${opt.label}"`;
           }
         } else if (chosen.startsWith("fill_password_")) {
           if (!options.password || !trustedOrigin) {
@@ -625,7 +655,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
                 input.dispatchEvent(new Event("input", { bubbles: true }));
                 input.dispatchEvent(new Event("change", { bubbles: true }));
                 return { ok: true as const };
-              }, { trustedOrigin, value: options.password.value })
+              }, { trustedOrigin, value: passwordValue! })
               .catch(() => null);
             if (!fill) {
               actionError = "password fill failed; the element disappeared or the page navigated";

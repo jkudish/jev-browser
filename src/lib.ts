@@ -15,7 +15,13 @@ export interface RawElement {
   typeable: boolean;
   selectable?: boolean; // native <select>
   passwordInput?: boolean; // native input[type=password], fillable on credential runs
-  options?: string[]; // option labels for selects
+  options?: SelectOption[]; // options for selects, with their DOM index
+}
+
+/** One native <select> option: its DOM index and (scrubbed) label. */
+export interface SelectOption {
+  i: number; // index in the live HTMLSelectElement.options list
+  label: string;
 }
 
 /** Pruned action-space element. */
@@ -24,7 +30,7 @@ export interface PageElement {
   attr: string;
   kind: "click" | "type" | "select" | "fill_password";
   description: string;
-  options?: string[]; // for kind === "select": the native option labels
+  options?: SelectOption[]; // for kind === "select": the native option labels
 }
 
 const JUNK_NAMES = new Set([

@@ -42,7 +42,7 @@ test("buildActionSpace dedupes hrefs, assigns kinds, caps size", () => {
     el(),
     el({ attr: "j2", text: "Espresso again", href: "https://en.wikipedia.org/wiki/Espresso#section" }),
     el({ attr: "j3", tag: "input", role: "textbox", text: "Search", href: "", clickable: false, typeable: true, typeAttr: "text" }),
-    el({ attr: "j4", tag: "select", role: "select", text: "Cabin", href: "", clickable: false, typeable: false, selectable: true, options: ["Economy", "Business"] }),
+    el({ attr: "j4", tag: "select", role: "select", text: "Cabin", href: "", clickable: false, typeable: false, selectable: true, options: [{ i: 0, label: "Economy" }, { i: 1, label: "Business" }] }),
     el({ attr: "j5", tag: "input", role: "textbox", text: "pw", href: "", typeable: true, typeAttr: "password" }),
   ];
   const { elements, truncated } = buildActionSpace(raw);
@@ -127,6 +127,12 @@ test("validateSecretBuffer keeps exact bytes and rejects bad input", () => {
   assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\n")), /line break/);
   assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\r")), /line break/);
   assert.throws(() => validateSecretBuffer(Buffer.from("abc\r\ndef")), /line break/);
+  // A secret whose whitespace-normalized echo would fall below the safe
+  // redaction length is rejected: pages echo values with collapsed
+  // whitespace, and a variant that short would match ordinary words.
+  assert.throws(() => validateSecretBuffer(Buffer.from("a  b")), /collapses below/);
+  assert.throws(() => validateSecretBuffer(Buffer.from(" a  b ")), /collapses below/);
+  assert.equal(validateSecretBuffer(Buffer.from("abcd  efgh")), "abcd  efgh"); // normalizes to 9, fine
 });
 
 test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, deeply", () => {
@@ -177,6 +183,14 @@ test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, de
   const mdEcho = md.replace(/([\\`*_\[\]])/g, "\\$1");
   assert.ok(!mdr.redact(`lead ${mdEcho} tail`).includes(mdEcho));
   assert.ok(mdr.redact(`lead ${mdEcho} tail`).includes(PASSWORD_REDACTED));
+
+  // ARIA snapshots serialize names into quoted YAML: quotes and backslashes
+  // are backslash-escaped inside them.
+  const quoted = 'ab"cd';
+  const ar = makeRedactor(quoted);
+  const ariaEcho = quoted.replace(/(["\\])/g, "\\$1");
+  assert.ok(!ar.redact(`- textbox "Username": ${ariaEcho}`).includes(ariaEcho));
+  assert.ok(ar.redact(`- textbox "Username": ${ariaEcho}`).includes(PASSWORD_REDACTED));
 
   // Capture windows are sized from the longest variant: every representation
   // the redactor can name must fit whole inside visible-limit + maxVariantLength.

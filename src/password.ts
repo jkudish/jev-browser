@@ -96,6 +96,14 @@ export function validateSecretBuffer(buf: Buffer, label = "password"): string {
   if (/[\r\n]/.test(text)) throw new Error(`${label} contains a line break; password inputs strip CR/LF, so it could never be filled (produce it without the trailing newline, e.g. op read --no-newline)`);
   // Code points, not UTF-16 units: two emoji must not count as four characters.
   if ([...text].length < MIN_SECRET_CHARS) throw new Error(`${label} is shorter than ${MIN_SECRET_CHARS} characters`);
+  // Pages normalize whitespace when echoing (collapsed DOM text, trimmed
+  // labels). The normalized echo must stay a redactable variant: if it
+  // collapses below the safe redaction length, no variant could match it
+  // without matching ordinary words everywhere.
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if ([...normalized].length < MIN_SECRET_CHARS) {
+    throw new Error(`${label} collapses below ${MIN_SECRET_CHARS} characters when whitespace is normalized (pages echo it that way); choose a longer one`);
+  }
   return text;
 }
 
@@ -165,8 +173,13 @@ export async function readHandoffSecret(path: string, dir = handoffDir()): Promi
     return buf.subarray(0, read);
   } catch (error) {
     // One-shot even on failure, but only when the pathname still names the
-    // inode we pinned: a replacement race must not make us delete the
-    // replacement, which is somebody else's file.
+    // inode we pinned: a replacement between open and unlink must not make
+    // us delete the replacement, which is somebody else's file. The
+    // lstat-to-unlink gap is not atomic; closing it fully needs an atomic
+    // compare-inode-and-unlink that Node does not expose. The residual race
+    // requires a same-UID process to win a microsecond window, and a
+    // same-UID attacker already has strictly better attacks (ptrace, /proc
+    // memory, replacing the binary), so this boundary is accepted.
     const cur = await lstat(resolvedPath).catch(() => null);
     const pinned = await fh.stat().catch(() => null);
     if (cur && pinned && cur.ino === pinned.ino && cur.dev === pinned.dev && !unlinked) {
@@ -258,6 +271,9 @@ export function makeRedactor(secret: string): Redactor {
   // Markdown: Turndown escapes its special characters with a backslash, so
   // a secret containing one comes back as `ab\*cd` in markdown output.
   variants.add(secret.replace(/([\\`*_[\]])/g, "\\$1"));
+  // ARIA snapshots serialize accessible names into quoted YAML strings:
+  // quotes and backslashes inside a name are backslash-escaped there.
+  variants.add(secret.replace(/(["\\])/g, "\\$1"));
   // Page-side pipelines normalize whitespace before we see the string:
   // label resolution collapses runs and trims, excerpts collapse, option
   // labels trim. The normalized echo of the secret is its own variant.

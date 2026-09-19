@@ -160,6 +160,46 @@ test("label-for inputs appear in the action space and can be typed into", { skip
   }
 });
 
+test("native selects choose by DOM index, even with filtered blank options", { skip: !hasKey }, async () => {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const fixture = readFileSync(fileURLToPath(new URL("./fixtures/select.html", import.meta.url)));
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(fixture);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Choose Business as the cabin class in the dropdown, then stop",
+            start_url: `http://127.0.0.1:${port}/`,
+            max_steps: 5,
+            max_seconds: 60,
+          },
+        },
+        undefined,
+        { timeout: 120_000 },
+      );
+      const body = payload(result);
+      const selected = body.steps.find((s) => /^select_/.test(s.executed_action ?? "") && !s.action_error);
+      assert.ok(selected, `no select action executed: ${JSON.stringify(body.steps.map((s) => [s.proposed_action, s.executed_action, s.action_error]))}`);
+      assert.match(selected.detail ?? "", /selected "Business"/);
+      // The page echoes the chosen value: picking the right DOM option (not
+      // the one at the model-list offset) proves index-based selection holds
+      // after the blank first option was filtered from the model's list.
+      assert.ok(body.page.content.includes("SELECTED: business"), `wrong option selected: ${body.page.content}`);
+      assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}`);
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 // ── Password fill ────────────────────────────────────────────────────────────
 import { mkdtemp, mkdir, writeFile, chmod, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -244,6 +284,49 @@ test("password fill: handoff file consumed, filled, never submitted, never leake
       { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_BROWSER_HANDOFF_DIR: dir },
     );
     await assert.rejects(() => stat(file), /ENOENT/); // consumed at run start
+  } finally {
+    await fixture.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("password fill: aria snapshots of an echoing page are scrubbed too", { skip: !hasKey }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-handoff-e2e-"));
+  await chmod(dir, 0o700);
+  const file = join(dir, "pw.aria");
+  await writeFile(file, SECRET, { mode: 0o600 });
+  const fixture = await serveFixture("password.html");
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Fill the password field with the configured password, then stop",
+              start_url: `${fixture.origin}/`,
+              max_steps: 5,
+              max_seconds: 60,
+              format: "aria",
+              password_file: file,
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        const fill = body.steps.find((s) => /^fill_password_/.test(s.executed_action ?? "") && !s.action_error);
+        assert.ok(fill, "no fill executed");
+        assert.equal(body.password_filled, true);
+        // The fixture reflects the value into the mirror link's aria-label,
+        // so the aria snapshot is produced from a page that holds it: the
+        // YAML serializer's output must come back scrubbed.
+        assert.ok(body.page.content.includes("PW_FILLED"), "the page should show the fill marker");
+        assert.ok(body.page.content.includes("[REDACTED]"), "the aria-label echo must be redacted in the snapshot");
+        assertNoSecret(result, body);
+      },
+      { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_BROWSER_HANDOFF_DIR: dir },
+    );
   } finally {
     await fixture.close();
     await rm(dir, { recursive: true, force: true });
