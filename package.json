@@ -40,9 +40,9 @@
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/unit.test.mjs",
-    "test:e2e": "node --test test/e2e.test.mjs"
+    "test:e2e": "node --test test/e2e.test.mjs",
+    "postinstall": "node scripts/ensure-chromium.mjs"
   },
-  "postinstall": "node scripts/ensure-chromium.mjs",
   "keywords": [
     "mcp",
     "model-context-protocol",
