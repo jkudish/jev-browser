@@ -366,32 +366,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const started = performance.now();
   const deadlineAt = started + maxSeconds * 1000;
 
-  // One abort source per run: the wall-clock deadline, optionally composed
-  // with caller cancellation (the MCP layer forwards its signal).
-  const controller = new AbortController();
-  const deadlineTimer = setTimeout(() => controller.abort(new Error("deadline-exceeded")), maxSeconds * 1000);
-  const onExternalAbort = () => controller.abort(new Error("cancelled-by-caller"));
-  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
-  if (externalSignal?.aborted) controller.abort(new Error("cancelled-by-caller"));
-
-  // The model is resolved per run, not at import time, so importing the
-  // library has no configuration side effects and env changes apply per call.
-  const requestedModel = process.env.JEV_BROWSER_MODEL ?? "jev-latest";
-  const budget: RunBudget = {
-    usage: { jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 },
-    signal: controller.signal,
-    deadlineAt,
-    requestedModel,
-    model: requestedModel,
-    provider: null,
-  };
-  const remaining = () => Math.max(0, deadlineAt - performance.now());
-  const bounded = (cap: number) => Math.max(250, Math.min(cap, remaining() || 250));
-
-  // Credential-run guards, before anything launches: exact-origin trust
-  // anchor, no Playwright debug modes (they can log filled values), no video
-  // recording. The redactor built here scrubs every model-facing and
-  // serialized string this run produces.
+  // Credential-run guards run before any timer, listener, or browser is
+  // armed: a rejected direct-library call must not leak the deadline timer
+  // (or the caller's abort listener) for maxSeconds.
   let redactor: Redactor | null = null;
   let trustedOrigin: string | null = null;
   let passwordValue: string | null = null;
@@ -414,6 +391,29 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // value in the task string, scrub it before any model or typing generator
   // sees it, so "the model never sees the value" holds unconditionally.
   const safeTask = R(task);
+
+  // One abort source per run: the wall-clock deadline, optionally composed
+  // with caller cancellation (the MCP layer forwards its signal).
+  const controller = new AbortController();
+  const deadlineTimer = setTimeout(() => controller.abort(new Error("deadline-exceeded")), maxSeconds * 1000);
+  const onExternalAbort = () => controller.abort(new Error("cancelled-by-caller"));
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+  if (externalSignal?.aborted) controller.abort(new Error("cancelled-by-caller"));
+
+  // The model is resolved per run, not at import time, so importing the
+  // library has no configuration side effects and env changes apply per call.
+  const requestedModel = process.env.JEV_BROWSER_MODEL ?? "jev-latest";
+  const budget: RunBudget = {
+    usage: { jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 },
+    signal: controller.signal,
+    deadlineAt,
+    requestedModel,
+    model: requestedModel,
+    provider: null,
+  };
+  const remaining = () => Math.max(0, deadlineAt - performance.now());
+  const bounded = (cap: number) => Math.max(250, Math.min(cap, remaining() || 250));
+
   // Credential runs size each capture window as visible limit + the longest
   // secret representation, so an echo that starts inside the visible window
   // is always captured whole: redaction sees the complete variant before any

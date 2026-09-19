@@ -94,13 +94,19 @@ export function validateSecretBuffer(buf: Buffer, label = "password"): string {
   // filled faithfully, and a page echoing the stripped value back would
   // produce a string no redaction variant matches. Reject up front.
   if (/[\r\n]/.test(text)) throw new Error(`${label} contains a line break; password inputs strip CR/LF, so it could never be filled (produce it without the trailing newline, e.g. op read --no-newline)`);
+  // Control characters (and DEL) are JSON/YAML-escaped differently by every
+  // serializer that touches an echo (aria snapshots, markdown, console
+  // capture). Rather than chase each escape form, refuse them: no real
+  // password contains them.
+  if (/[\x00-\x1f\x7f]/.test(text)) throw new Error(`${label} contains a control character`);
   // Code points, not UTF-16 units: two emoji must not count as four characters.
   if ([...text].length < MIN_SECRET_CHARS) throw new Error(`${label} is shorter than ${MIN_SECRET_CHARS} characters`);
   // Pages normalize whitespace when echoing (collapsed DOM text, trimmed
-  // labels). The normalized echo must stay a redactable variant: if it
+  // labels), and accessible-name resolution additionally strips zero-width
+  // characters. The normalized echo must stay a redactable variant: if it
   // collapses below the safe redaction length, no variant could match it
   // without matching ordinary words everywhere.
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = normalizeEcho(text);
   if ([...normalized].length < MIN_SECRET_CHARS) {
     throw new Error(`${label} collapses below ${MIN_SECRET_CHARS} characters when whitespace is normalized (pages echo it that way); choose a longer one`);
   }
@@ -244,6 +250,17 @@ export interface Redactor {
 }
 
 /**
+ * The transformations page-side pipelines apply to an echoed string before
+ * the redactor sees it: whitespace runs collapse and trim, zero-width
+ * characters are stripped from accessible names. Used both to generate
+ * redaction variants and to reject secrets whose echo would collapse below
+ * the safe redaction length.
+ */
+function normalizeEcho(s: string): string {
+  return s.replace(/[\u200b\u00ad]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
  * Per-run redactor covering the representations a page can echo back: the
  * raw value, its percent-encoded forms (URLs), and its HTML-entity forms.
  * Applied to every model-facing state, trace, error, and result payload.
@@ -272,13 +289,16 @@ export function makeRedactor(secret: string): Redactor {
   // a secret containing one comes back as `ab\*cd` in markdown output.
   variants.add(secret.replace(/([\\`*_[\]])/g, "\\$1"));
   // ARIA snapshots serialize accessible names into quoted YAML strings:
-  // quotes and backslashes inside a name are backslash-escaped there.
+  // quotes and backslashes inside a name are backslash-escaped there, and
+  // single quotes are doubled when the assembled value needs single quoting.
   variants.add(secret.replace(/(["\\])/g, "\\$1"));
-  // Page-side pipelines normalize whitespace before we see the string:
-  // label resolution collapses runs and trims, excerpts collapse, option
-  // labels trim. The normalized echo of the secret is its own variant.
+  variants.add(secret.replace(/'/g, "''"));
+  // Page-side pipelines normalize before we see the string: label resolution
+  // collapses runs and trims, excerpts collapse, option labels trim, and
+  // accessible-name computation strips zero-width characters. The normalized
+  // echo of every variant is itself a variant.
   for (const v of Array.from(variants)) {
-    if (/\s/.test(v)) variants.add(v.replace(/\s+/g, " ").trim());
+    variants.add(normalizeEcho(v));
   }
   const ordered = Array.from(variants)
     .filter((v) => v.length >= MIN_SECRET_CHARS)

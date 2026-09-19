@@ -205,7 +205,7 @@ import { mkdtemp, mkdir, writeFile, chmod, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SECRET = "e2e pw!&q=1";
+const SECRET = "e2e 'pw'!&q=1"; // contains a single quote: the aria snapshot serializer doubles it inside quoted YAML
 
 async function serveFixture(name) {
   const { createServer } = await import("node:http");
@@ -229,6 +229,10 @@ function assertNoSecret(result, body) {
     new URLSearchParams({ x: SECRET }).toString().slice(2),
     SECRET.replace(/&/g, "&amp;"),
     SECRET.replace(/([&<>"'])/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c),
+    // aria snapshots: single quotes double inside single-quoted YAML values,
+    // quotes and backslashes backslash-escape inside double-quoted ones.
+    SECRET.replace(/'/g, "''"),
+    SECRET.replace(/(["\\])/g, "\\$1"),
   ];
   for (const echo of echoes) {
     assert.ok(!haystack.includes(echo), `the password leaked into the tool result (${echo === SECRET ? "raw" : "encoded"})`);

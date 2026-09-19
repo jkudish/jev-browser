@@ -127,11 +127,15 @@ test("validateSecretBuffer keeps exact bytes and rejects bad input", () => {
   assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\n")), /line break/);
   assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\r")), /line break/);
   assert.throws(() => validateSecretBuffer(Buffer.from("abc\r\ndef")), /line break/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\x01")), /control character/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\x7f")), /control character/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("abcd\tefgh")), /control character/);
   // A secret whose whitespace-normalized echo would fall below the safe
   // redaction length is rejected: pages echo values with collapsed
   // whitespace, and a variant that short would match ordinary words.
   assert.throws(() => validateSecretBuffer(Buffer.from("a  b")), /collapses below/);
   assert.throws(() => validateSecretBuffer(Buffer.from(" a  b ")), /collapses below/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("a\u200bb\u00adc")), /collapses below/); // zero-width stripped by name resolution
   assert.equal(validateSecretBuffer(Buffer.from("abcd  efgh")), "abcd  efgh"); // normalizes to 9, fine
 });
 
@@ -185,12 +189,24 @@ test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, de
   assert.ok(mdr.redact(`lead ${mdEcho} tail`).includes(PASSWORD_REDACTED));
 
   // ARIA snapshots serialize names into quoted YAML: quotes and backslashes
-  // are backslash-escaped inside them.
+  // are backslash-escaped inside them, single quotes are doubled when the
+  // value needs single quoting, and zero-width characters are stripped from
+  // accessible names before serialization.
   const quoted = 'ab"cd';
   const ar = makeRedactor(quoted);
   const ariaEcho = quoted.replace(/(["\\])/g, "\\$1");
   assert.ok(!ar.redact(`- textbox "Username": ${ariaEcho}`).includes(ariaEcho));
   assert.ok(ar.redact(`- textbox "Username": ${ariaEcho}`).includes(PASSWORD_REDACTED));
+  const single = "ab'cd{ef";
+  const sr = makeRedactor(single);
+  const singleEcho = single.replace(/'/g, "''");
+  assert.ok(!sr.redact(`key: '${singleEcho}'`).includes(singleEcho));
+  assert.ok(sr.redact(`key: '${singleEcho}'`).includes(PASSWORD_REDACTED));
+  const zw = "ab\u200bcd\u00adef";
+  const zr = makeRedactor(zw);
+  const zwEcho = zw.replace(/[\u200b\u00ad]/g, "");
+  assert.ok(!zr.redact(`- link ${zwEcho}`).includes(zwEcho));
+  assert.ok(zr.redact(`- link ${zwEcho}`).includes(PASSWORD_REDACTED));
 
   // Capture windows are sized from the longest variant: every representation
   // the redactor can name must fit whole inside visible-limit + maxVariantLength.
