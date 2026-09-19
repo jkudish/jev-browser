@@ -3,11 +3,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { navigate, type NavigateOptions } from "./navigate.js";
+import { assertNoPlaywrightDebug, parseTrustedOrigin, readSecretFromPath, readSecretFromStdin, validateSecretBuffer } from "./password.js";
 
 interface CliArgs extends NavigateOptions {
   screenshotPath?: string;
   recordPath?: string;
   help?: boolean;
+  passwordFile?: string;
+  passwordOrigin?: string;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -40,6 +43,12 @@ function parseArgs(argv: string[]): CliArgs {
       case "--record":
         args.recordPath = argv[++i];
         break;
+      case "--password-file":
+        args.passwordFile = argv[++i];
+        break;
+      case "--password-origin":
+        args.passwordOrigin = argv[++i];
+        break;
       case "--help":
       case "-h":
         args.help = true;
@@ -65,6 +74,14 @@ Options:
   --record <path>                      Record a video of the page; a .webm path
                                        saves to that file, any other value is a
                                        directory for Playwright's output
+  --password-file <path|->            Fill native password fields with a secret
+                                       read from <path> or piped on stdin ('-');
+                                       e.g. op read --no-newline 'op://...' |
+                                       jev-browser run ... --password-file -
+  --password-origin <origin>          Required with --password-file: the exact
+                                       origin (e.g. https://acme.com) the
+                                       password may be filled on; http only on
+                                       localhost
   -h, --help                           Show this help
 
 Result JSON is printed to stdout. Environment: TYPESAFE_API_KEY required;
@@ -79,7 +96,26 @@ export async function runCli(argv: string[]): Promise<number> {
     return args.help ? 0 : 1;
   }
 
-  const { screenshotPath, recordPath, ...navigateArgs } = args;
+  // Credential delivery: the secret arrives through stdin or a local file the
+  // human chose, never argv or the environment. The same guards as the MCP
+  // path apply: exact-origin binding, no debug modes, no recording.
+  let password: { value: string; origin: string } | undefined;
+  if (args.passwordFile) {
+    try {
+      if (!args.passwordOrigin) throw new Error("--password-file requires --password-origin (an exact origin, e.g. https://acme.com)");
+      const origin = parseTrustedOrigin(args.passwordOrigin);
+      if (!origin) throw new Error("--password-origin must be an exact origin like https://acme.com (http is allowed only on localhost)");
+      if (args.recordPath) throw new Error("--record is refused on password runs");
+      assertNoPlaywrightDebug();
+      const buf = args.passwordFile === "-" ? await readSecretFromStdin() : await readSecretFromPath(args.passwordFile);
+      password = { value: validateSecretBuffer(buf), origin };
+    } catch (error) {
+      console.error(`password source: ${(error as Error).message}`);
+      return 2;
+    }
+  }
+
+  const { screenshotPath, recordPath, passwordFile, passwordOrigin, ...navigateArgs } = args;
   let recordDir: string | undefined;
   let tempRecordDir: string | undefined;
   if (recordPath) {
@@ -99,6 +135,7 @@ export async function runCli(argv: string[]): Promise<number> {
       ...navigateArgs,
       screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
       recordDir,
+      password,
     })) as Record<string, any>;
     if (recordPath?.endsWith(".webm") && result.video_path) {
       const fs = await import("node:fs/promises");

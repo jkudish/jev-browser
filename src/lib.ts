@@ -14,6 +14,7 @@ export interface RawElement {
   clickable: boolean;
   typeable: boolean;
   selectable?: boolean; // native <select>
+  passwordInput?: boolean; // native input[type=password], fillable on credential runs
   options?: string[]; // option labels for selects
 }
 
@@ -21,7 +22,7 @@ export interface RawElement {
 export interface PageElement {
   id: string; // e1, e2, ...
   attr: string;
-  kind: "click" | "type" | "select";
+  kind: "click" | "type" | "select" | "fill_password";
   description: string;
   options?: string[]; // for kind === "select": the native option labels
 }
@@ -49,12 +50,32 @@ export function isNoiseHref(href: string): boolean {
   return false;
 }
 
+export interface BuildActionSpaceOptions {
+  /** Offer fill_password actions on native password inputs. Off unless a password source is active. */
+  passwordActive?: boolean;
+}
+
 /** Filter, dedupe by destination, cap, and describe the action space for one step. */
-export function buildActionSpace(raw: RawElement[]): { elements: PageElement[]; truncated: boolean } {
+export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOptions = {}): { elements: PageElement[]; truncated: boolean } {
+  const passwordActive = opts.passwordActive === true;
   const seenHrefs = new Set<string>();
   const elements: PageElement[] = [];
   for (const el of raw) {
     if (elements.length >= MAX_ELEMENTS) break;
+    if (el.passwordInput) {
+      // Only offered when a password source is active. Password inputs bypass
+      // the noise-name drop: a nameless password field is still the field to
+      // fill, and the label falls back to a generic one.
+      if (!passwordActive) continue;
+      const label = isNoiseName(el.text) ? "" : el.text.slice(0, 60);
+      elements.push({
+        id: `e${elements.length + 1}`,
+        attr: el.attr,
+        kind: "fill_password",
+        description: `input "${label || "password"}" (fill with the configured password; it is never typed by a model)`,
+      });
+      continue;
+    }
     if (isNoiseName(el.text)) continue;
     if (isNoiseHref(el.href)) continue;
     // Never offer to type into password or file inputs.

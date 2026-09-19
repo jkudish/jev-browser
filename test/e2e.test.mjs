@@ -9,7 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const serverPath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const hasKey = Boolean(process.env.TYPESAFE_API_KEY);
 
-async function withClient(fn) {
+async function withClient(fn, extraEnv = {}) {
   const client = new Client({ name: "jev-browser-e2e", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -18,6 +18,7 @@ async function withClient(fn) {
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY ?? "",
       ...(process.env.OPENROUTER_API_KEY ? { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY } : {}),
       ...(process.env.JEV_BROWSER_TYPE_MODEL ? { JEV_BROWSER_TYPE_MODEL: process.env.JEV_BROWSER_TYPE_MODEL } : {}),
+      ...extraEnv,
     },
   });
   await client.connect(transport);
@@ -156,5 +157,181 @@ test("label-for inputs appear in the action space and can be typed into", { skip
     });
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// ── Password fill ────────────────────────────────────────────────────────────
+import { mkdtemp, mkdir, writeFile, chmod, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const SECRET = "e2e-hunter-two";
+
+async function serveFixture(name) {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const fixture = readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)));
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(fixture);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { origin: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
+}
+
+function assertNoSecret(result, body) {
+  const haystack = JSON.stringify(body) + JSON.stringify(result.content ?? []);
+  assert.ok(!haystack.includes(SECRET), "the password leaked into the tool result");
+}
+
+test("password fill: handoff file consumed, filled, never submitted, never leaked", { skip: !hasKey }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-handoff-e2e-"));
+  await chmod(dir, 0o700);
+  const file = join(dir, "pw.e2e");
+  await writeFile(file, SECRET, { mode: 0o600 });
+  const fixture = await serveFixture("password.html");
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Fill the password field with the configured password, then stop",
+              start_url: `${fixture.origin}/`,
+              max_steps: 5,
+              max_seconds: 60,
+              password_file: file,
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        const fill = body.steps.find((s) => /^fill_password_/.test(s.executed_action ?? "") && !s.action_error);
+        assert.ok(fill, `no fill executed: ${JSON.stringify(body.steps.map((s) => [s.proposed_action, s.executed_action, s.action_error]))}`);
+        assert.match(fill.detail ?? "", /filled password into "Password"; not submitted/);
+        assert.equal(body.password_filled, true);
+        assert.equal(body.screenshot_suppressed, "credential-fill");
+        assert.ok(!result.content.some((b) => b.type === "image"), "screenshot must be suppressed after a fill");
+        assert.ok(body.page.content.includes("PW_FILLED"), "the page should show the fill marker");
+        assert.ok(!body.page.content.includes("SUBMITTED"), "the form must never be submitted by a fill");
+        assertNoSecret(result, body);
+      },
+      { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_BROWSER_HANDOFF_DIR: dir },
+    );
+    await assert.rejects(() => stat(file), /ENOENT/); // consumed at run start
+  } finally {
+    await fixture.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("password fill: wrong-origin pages are refused and the value never lands", { skip: !hasKey }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-handoff-e2e-"));
+  await chmod(dir, 0o700);
+  const file = join(dir, "pw.e2e");
+  await writeFile(file, SECRET, { mode: 0o600 });
+  const fixture = await serveFixture("password.html");
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Fill the password field with the configured password, then stop",
+              start_url: `${fixture.origin}/`,
+              max_steps: 4,
+              max_seconds: 60,
+              password_file: file,
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        const refused = body.steps.find((s) => /origin_mismatch/.test(s.action_error ?? ""));
+        assert.ok(refused, `expected an origin_mismatch refusal: ${JSON.stringify(body.steps.map((s) => s.action_error))}`);
+        assert.notEqual(body.password_filled, true);
+        assert.ok(!body.page.content.includes("PW_FILLED"), "nothing may be filled on the wrong origin");
+        assert.ok(!body.page.content.includes("SUBMITTED"));
+        assertNoSecret(result, body);
+      },
+      // Trust anchor points elsewhere: every fill on the fixture origin is refused.
+      { JEV_BROWSER_PASSWORD_ORIGIN: "http://127.0.0.1:9", JEV_BROWSER_HANDOFF_DIR: dir },
+    );
+  } finally {
+    await fixture.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("password fill: JEV_PASSWORD_* env path works; other names are rejected", { skip: !hasKey }, async () => {
+  const fixture = await serveFixture("password.html");
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Fill the password field with the configured password, then stop",
+              start_url: `${fixture.origin}/`,
+              max_steps: 5,
+              max_seconds: 60,
+              password_env: "JEV_PASSWORD_E2E",
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        assert.ok(body.steps.some((s) => /^fill_password_/.test(s.executed_action ?? "") && !s.action_error), "fill did not execute");
+        assert.ok(body.page.content.includes("PW_FILLED"));
+        assertNoSecret(result, body);
+
+        // A non-prefixed name is rejected before its value is ever read.
+        const rejected = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: { task: "x", start_url: `${fixture.origin}/`, password_env: "TYPESAFE_API_KEY" },
+          },
+          undefined,
+          { timeout: 30_000 },
+        );
+        assert.equal(rejected.isError, true);
+        assert.match(rejected.content.find((b) => b.type === "text").text, /JEV_PASSWORD_/);
+      },
+      { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_PASSWORD_E2E: SECRET },
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("password fill: misconfigured handoff files fail loudly, before any browser", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-handoff-e2e-"));
+  await chmod(dir, 0o700);
+  const loose = join(dir, "loose");
+  await writeFile(loose, SECRET, { mode: 0o644 });
+  try {
+    await withClient(
+      async (client) => {
+        const cases = [
+          [{ task: "x", start_url: "https://example.com/", password_file: loose }, /0600/],
+          [{ task: "x", start_url: "https://example.com/", password_file: "/etc/passwd" }, /inside the handoff directory/],
+          [{ task: "x", start_url: "https://example.com/", password_file: loose, password_env: "JEV_PASSWORD_E2E" }, /at most one/],
+        ];
+        for (const [args, pattern] of cases) {
+          const rejected = await client.callTool({ name: "jev_navigate", arguments: args }, undefined, { timeout: 30_000 });
+          assert.equal(rejected.isError, true, JSON.stringify(args));
+          assert.match(rejected.content.find((b) => b.type === "text").text, pattern);
+        }
+      },
+      { JEV_BROWSER_PASSWORD_ORIGIN: "https://example.com", JEV_BROWSER_HANDOFF_DIR: dir, JEV_PASSWORD_E2E: SECRET },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

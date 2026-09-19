@@ -21,6 +21,7 @@ import {
   selectorFor,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
+import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, type Redactor } from "./password.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
@@ -35,6 +36,14 @@ export interface NavigateOptions {
   maxChars?: number;
   screenshot?: "final" | "none";
   recordDir?: string;
+  /**
+   * Credential run: fill native password inputs on this exact origin with this
+   * value. The value is redacted from every state, trace, error, payload, and
+   * result this function produces; recording is refused and the final
+   * screenshot is suppressed once a fill is attempted. Never source this from
+   * anything model-composed (see src/password.ts for the delivery channels).
+   */
+  password?: { value: string; origin: string };
 }
 
 export interface StepRecord {
@@ -256,7 +265,10 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
           (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
           ["searchbox", "textbox"].includes(roleAttr);
         const selectable = tag === "select";
-        if (!clickable && !typeable && !selectable) continue;
+        // Password inputs are excluded from typeable by design; they are
+        // stamped separately so credential runs can offer fill_password.
+        const passwordInput = tag === "input" && typeAttr === "password";
+        if (!clickable && !typeable && !selectable && !passwordInput) continue;
         const attr = `j${out.length + 1}`;
         el.setAttribute("data-jev-id", attr);
         const options =
@@ -266,7 +278,7 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
                 .filter(Boolean)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, selectable, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
       }
       return out;
     });
@@ -352,11 +364,32 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const remaining = () => Math.max(0, deadlineAt - performance.now());
   const bounded = (cap: number) => Math.max(250, Math.min(cap, remaining() || 250));
 
+  // Credential-run guards, before anything launches: exact-origin trust
+  // anchor, no Playwright debug modes (they can log filled values), no video
+  // recording. The redactor built here scrubs every model-facing and
+  // serialized string this run produces.
+  let redactor: Redactor | null = null;
+  let trustedOrigin: string | null = null;
+  if (options.password) {
+    const origin = parseTrustedOrigin(options.password.origin);
+    if (!origin) {
+      throw new Error("navigate(): password.origin must be an exact https origin (http only on localhost), e.g. https://acme.com");
+    }
+    trustedOrigin = origin;
+    assertNoPlaywrightDebug();
+    if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with a password source");
+    redactor = makeRedactor(options.password.value);
+  }
+  const R = (s: string): string => redactor?.redact(s) ?? s;
+
   const steps: StepRecord[] = [];
   const consoleEvents: ConsoleEvent[] = [];
   let consoleDropped = 0;
   const currentStep = { n: 0 };
   const extractionProblems: string[] = [];
+  // Set immediately before a fill is attempted: even a failed fill counts as
+  // exposed, so the final screenshot stays suppressed.
+  let credentialUsed = false;
 
   let browser: Browser | null = null;
   let status = "error";
@@ -373,14 +406,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     p.on("console", (msg) => {
       const type = msg.type();
       if (type !== "error" && type !== "warning") return;
-      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: msg.text().slice(0, 300), page: p.url().slice(0, 120) });
+      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: R(msg.text().slice(0, 300)), page: R(p.url().slice(0, 120)) });
     });
-    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: String(err).slice(0, 300), page: p.url().slice(0, 120) }));
+    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: R(String(err).slice(0, 300)), page: R(p.url().slice(0, 120)) }));
     p.on("requestfailed", (req) =>
       recordEvent({
         type: "request_failed",
-        text: `${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300),
-        page: p.url().slice(0, 120),
+        text: R(`${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300)),
+        page: R(p.url().slice(0, 120)),
       }),
     );
   };
@@ -420,7 +453,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
 
       const raw = await extractAndStamp(page, bounded);
-      const { elements, truncated } = buildActionSpace(raw);
+      const { elements, truncated } = buildActionSpace(raw, { passwordActive: allowTyping && Boolean(options.password) });
       const observables = await pageObservables(page, bounded);
 
       // Empty action space is still judged normally: controls-only criteria
@@ -428,8 +461,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       // fire on terminal pages with no interactive elements.
       const state = {
         task,
-        current_page: { url: observables.url, title: observables.title },
-        page_text_excerpt: observables.excerpt,
+        current_page: { url: R(observables.url), title: R(observables.title) },
+        page_text_excerpt: R(observables.excerpt),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
         element_list_truncated: truncated,
         no_interactive_elements: elements.length === 0,
@@ -484,7 +517,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
 
       const element = elements.find(
-        (e) => chosen === `click_${e.id}` || chosen === `type_${e.id}` || chosen === `select_${e.id}`,
+        (e) =>
+          chosen === `click_${e.id}` ||
+          chosen === `type_${e.id}` ||
+          chosen === `select_${e.id}` ||
+          chosen === `fill_password_${e.id}`,
       );
 
       let detail = chosen;
@@ -506,7 +543,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           if (!allowTyping) {
             actionError = "typing disabled by caller";
           } else {
-            const generated = await generateTextToType(budget, task, element.description, page.url());
+            const generated = await generateTextToType(budget, task, element.description, R(page.url()));
             await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
             await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
@@ -519,7 +556,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           } else {
             const optionAnswer = await askJev(
               budget,
-              { task, page: { url: observables.url, title: observables.title }, dropdown: element.description, options: opts },
+              { task, page: { url: R(observables.url), title: R(observables.title) }, dropdown: element.description, options: opts },
               { option: selectOptionQuestion(element.description, opts) },
             );
             const pickedIndex = Number((optionAnswer.option.choice as string).slice(1));
@@ -527,13 +564,43 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             await page.selectOption(selectorFor(element), { label });
             detail = `selected "${label}"`;
           }
+        } else if (chosen.startsWith("fill_password_")) {
+          if (!options.password || !trustedOrigin) {
+            actionError = "no password source is active";
+          } else {
+            // Revalidate as close to the fill as the protocol allows: a fresh
+            // read of the element's type and the page origin on the same
+            // handle that will receive the value.
+            const handle = page.locator(selectorFor(element));
+            const check = await handle
+              .evaluate((el) => {
+                const input = el as HTMLInputElement;
+                return {
+                  isPassword: input.tagName === "INPUT" && input.type === "password",
+                  origin: window.location.origin,
+                };
+              })
+              .catch(() => null);
+            if (!check?.isPassword) {
+              actionError = "element is no longer a native password input";
+            } else if (check.origin !== trustedOrigin) {
+              actionError = `origin_mismatch: refused to fill on ${check.origin}; the password is bound to ${trustedOrigin}`;
+            } else {
+              // Exposed is marked before the attempt: even a failed fill
+              // suppresses the final screenshot.
+              credentialUsed = true;
+              await handle.fill(options.password.value, { timeout: bounded(4_000) });
+              const pwLabel = element.description.match(/"([^"]*)"/)?.[1] ?? "password";
+              detail = `filled password into "${pwLabel}"; not submitted`;
+            }
+          }
         } else {
           await page.click(selectorFor(element), { timeout: bounded(4_000) });
           detail = element.description;
         }
       } catch (error) {
         if (controller.signal.aborted) throw error; // deadline/cancellation propagates
-        actionError = (error as Error).message.slice(0, 160);
+        actionError = R((error as Error).message.slice(0, 160));
       }
 
       await settle(page, bounded);
@@ -556,9 +623,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const outcome = actionError
         ? "action failed"
         : after.url !== observables.url
-          ? `navigated to ${after.url}`
+          ? `navigated to ${R(after.url)}`
           : after.title !== observables.title
-            ? `page changed: "${after.title}"`
+            ? `page changed: "${R(after.title)}"`
             : Math.abs(after.textLength - observables.textLength) > 50
               ? "page content changed"
               : Math.abs(after.scrollY - observables.scrollY) > 40
@@ -577,9 +644,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       steps.push({
         ...base,
         executed_action: chosen,
-        detail,
+        detail: R(detail),
         recovery_reason: recoveryReason,
-        action_error: actionError,
+        action_error: actionError ? R(actionError) : undefined,
         outcome,
       });
 
@@ -589,17 +656,23 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     const finalObservables = await pageObservables(page, bounded);
     let payload: { truncated: boolean; true_length: number; content: string } | null = null;
     let screenshotBase64: string | null = null;
+    let screenshotSuppressed: "credential-fill" | undefined;
     try {
-      payload = await extractPayload(page, format, maxChars, bounded);
+      payload = await extractPayload(page, format, maxChars, bounded, R);
     } catch (error) {
-      extractionProblems.push(`page payload: ${(error as Error).message.slice(0, 160)}`);
+      extractionProblems.push(R(`page payload: ${(error as Error).message.slice(0, 160)}`));
     }
     if (screenshot === "final") {
-      try {
-        const buffer = await page.screenshot({ type: "jpeg", quality: 70, timeout: bounded(10_000) });
-        screenshotBase64 = buffer.toString("base64");
-      } catch (error) {
-        extractionProblems.push(`screenshot: ${(error as Error).message.slice(0, 160)}`);
+      if (credentialUsed) {
+        // The page can reflect the filled value; no capture after exposure.
+        screenshotSuppressed = "credential-fill";
+      } else {
+        try {
+          const buffer = await page.screenshot({ type: "jpeg", quality: 70, timeout: bounded(10_000) });
+          screenshotBase64 = buffer.toString("base64");
+        } catch (error) {
+          extractionProblems.push(`screenshot: ${(error as Error).message.slice(0, 160)}`);
+        }
       }
     }
 
@@ -608,12 +681,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     return {
       status,
       video_path: videoPath,
-      final_url: finalObservables.url,
-      final_title: finalObservables.title,
+      final_url: R(finalObservables.url),
+      final_title: R(finalObservables.title),
       format,
       max_chars: maxChars,
       page: payload,
-      extraction_problems: extractionProblems.length ? extractionProblems : undefined,
+      extraction_problems: extractionProblems.length ? extractionProblems.map(R) : undefined,
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
@@ -621,6 +694,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       elapsed_ms: Math.round(performance.now() - started),
       model: budget.model,
       jev_provider: budget.provider,
+      password_filled: credentialUsed || undefined,
+      screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
     };
   } catch (runError) {
@@ -628,7 +703,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     status = aborted && String((runError as Error).message).includes("deadline") ? "timeout" : "error";
     return {
       status,
-      error: aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message,
+      error: R(aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message),
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
@@ -649,6 +724,7 @@ async function extractPayload(
   format: string,
   maxChars: number,
   bounded: (cap: number) => number,
+  redact: (s: string) => string = (s) => s,
 ): Promise<{ truncated: boolean; true_length: number; content: string }> {
   let content = "";
   if (format === "html") {
@@ -668,6 +744,7 @@ async function extractPayload(
   } else {
     content = await page.evaluate(() => document.body?.innerText ?? "");
   }
+  content = redact(content);
   return {
     truncated: content.length > maxChars,
     true_length: content.length,

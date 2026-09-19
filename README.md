@@ -142,6 +142,71 @@ console.log(result.status, result.final_url);
 console.log(result.page.content);
 ```
 
+## Password fill (logins)
+
+The agent can fill native password fields without the password ever reaching a model. The value arrives through one of three channels, lives in memory for a single run, and is scrubbed from every state, trace, error, URL, and payload the run produces. Video recording is refused on credential runs and the final screenshot is suppressed once a fill is attempted. A fill never submits: no Enter, no click.
+
+Set the trust anchor once, in the MCP server's environment:
+
+```bash
+JEV_BROWSER_PASSWORD_ORIGIN=https://acme.com
+```
+
+That must be an exact origin (scheme, host, port; no wildcards; http is allowed only on localhost). Fills happen only on that origin. Anywhere else the fill is refused and the refusal shows in the step trace as `origin_mismatch`.
+
+Then pipe the secret in per run. Any producer that can print bytes works: 1Password, Bitwarden, `pass`, LastPass, the macOS Keychain, `secret-tool`, Vault, a plain file, or an environment variable you already have.
+
+**MCP, via a one-shot handoff file.** The server only accepts files inside its handoff directory (default `~/.jev-browser/handoff`, mode 0700), validates them, and deletes them at run start:
+
+```bash
+mkdir -p ~/.jev-browser/handoff && chmod 700 ~/.jev-browser/handoff
+pwfile="$HOME/.jev-browser/handoff/pw.$$"
+op read --no-newline --out-file "$pwfile" 'op://Work/acme/password'
+chmod 600 "$pwfile"
+```
+
+```jsonc
+// arguments
+{
+  "task": "Log in and open the billing page",
+  "start_url": "https://acme.com/login",
+  "password_file": "/home/you/.jev-browser/handoff/pw.12345"
+}
+```
+
+**MCP, via an environment variable.** Naming a variable `JEV_PASSWORD_*` is the opt-in. Any other name is rejected before its value is ever looked up, so the model cannot probe the server's environment:
+
+```bash
+# once, in the MCP server's environment:
+JEV_PASSWORD_ACME="$(op read --no-newline 'op://Work/acme/password')"
+```
+
+```jsonc
+// arguments
+{
+  "task": "Log in and open the billing page",
+  "start_url": "https://acme.com/login",
+  "password_env": "JEV_PASSWORD_ACME"
+}
+```
+
+**CLI, straight from a pipe.** `-` reads the secret from stdin, so it never appears in argv, the environment, or process listings:
+
+```bash
+op read --no-newline 'op://Work/acme/password' |
+  npx -y @jkudish/jev-browser run "Log in and open the billing page" \
+    https://acme.com/login --password-file - --password-origin https://acme.com
+```
+
+Rules and limits of the mechanism, stated plainly:
+
+- `password_file` takes a local pathname only. Never put the password value in the task, in tool arguments, in argv, or in the filename.
+- Handoff files are one-shot: read and unlinked at run start. Recreate the file for every run.
+- The mechanism needs the agent's shell and the MCP server to share a filesystem. It does not protect against a host agent that reads the file itself or runs your secret manager without redirection; treat the `op read` command as operator-approved.
+- The trusted origin can read and transmit the password, and its pages can submit from an input event with no Enter key. Origin binding does not make a compromised site safe.
+- Redaction is defense in depth: raw, URL-encoded, and HTML-encoded echoes of the value are scrubbed from everything the run returns. It cannot cover arbitrary transformations, process-memory inspection, or OS-level monitoring. Credential runs refuse Playwright debug modes (`PWDEBUG`, `pw:api`) and video recording for the same reason.
+- Two password fields (login and confirmation) receive the same value; this is for logging in, not for setting new passwords. `allow_typing: false` disables the feature entirely.
+
 ## The tool
 
 Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus one small LLM call per typed field when a typing provider is configured. The example below is a real run.
@@ -226,7 +291,7 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 
 - Up to 240 elements per step; Jev's Choice supports 255 options. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages.
 - The markdown format converts the whole body, so it carries navigation chrome and can include inline script text; a readability pass is a candidate improvement, not a committed one.
-- Password and file inputs are never offered. Hover-revealed menus, keyboard actions (Escape, Enter on unstaged fields), multi-field form sequencing, shadow DOM, and iframes are out of scope for v0.1.
+- Password fields are only ever filled by code, never typed by the model, and only when a password source is configured (see [Password fill](#password-fill-logins)); file inputs are never offered. Hover-revealed menus, keyboard actions (Escape, Enter on unstaged fields), multi-field form sequencing, shadow DOM, and iframes are out of scope for v0.1.
 - Thresholds (0.85 goal, 0.85 stuck, budgets) are starting points measured on Wikipedia and DuckDuckGo tasks. Tune them for your sites.
 - Jev is calibrated, not infallible. Treat the trace as evidence, not proof.
 
@@ -242,6 +307,8 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 | `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
+| `JEV_BROWSER_PASSWORD_ORIGIN` | unset | Required for password fill: the exact origin password fields may be filled on. |
+| `JEV_BROWSER_HANDOFF_DIR` | `~/.jev-browser/handoff` | Directory password handoff files must live in (0700). |
 
 ### Vercel
 
