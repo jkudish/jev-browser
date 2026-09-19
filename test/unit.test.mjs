@@ -88,7 +88,7 @@ test("heuristicQuery strips task boilerplate", () => {
 });
 
 // ── Password delivery (src/password.ts) ──────────────────────────────────────
-import { mkdtemp, mkdir, writeFile, chmod, symlink, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, chmod, symlink, rm, stat, link } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -124,16 +124,36 @@ test("validateSecretBuffer keeps exact bytes and rejects bad input", () => {
   assert.throws(() => validateSecretBuffer(Buffer.concat([Buffer.from("abcdef"), Buffer.alloc(4096)])), /exceeds/);
 });
 
-test("redactor covers raw, URL-encoded, and HTML-entity echoes, deeply", () => {
+test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, deeply", () => {
   const secret = "p@ss&word=1";
   const { redact, redactDeep } = makeRedactor(secret);
   assert.equal(redact(`echo ${secret} done`), `echo ${PASSWORD_REDACTED} done`);
   assert.equal(redact(`url?q=${encodeURIComponent(secret)}`), `url?q=${PASSWORD_REDACTED}`);
-  assert.ok(!redact(secret.replace(/&/g, "&amp;")).includes("p@ss"));
+  assert.ok(!redact(secret.replace(/&/g, "&amp;")).includes("p@ss")); // textContent serialization: only & escaped
   assert.ok(!redact(Array.from(secret, (c) => `&#${c.codePointAt(0)};`).join("")).includes("word"));
   const deep = redactDeep({ a: [secret], nested: { b: `x${secret}y` }, keep: 42 });
   assert.ok(!JSON.stringify(deep).includes(secret));
   assert.equal(deep.keep, 42);
+
+  // application/x-www-form-urlencoded: space becomes + and more punctuation
+  // is percent-escaped than encodeURIComponent does.
+  const spaced = "ab cd!";
+  const form = makeRedactor(spaced);
+  const formEcho = new URLSearchParams({ q: spaced }).toString();
+  assert.notEqual(formEcho, encodeURIComponent(spaced)); // the encodings really differ
+  const formOut = form.redact(formEcho);
+  assert.ok(!formOut.includes(spaced) && !formOut.includes("cd!") && formOut.includes(PASSWORD_REDACTED));
+
+  // The partial HTML serializations real DOM APIs produce: textContent
+  // escapes only & and <; attribute serialization escapes & < > " '.
+  const punct = "a'b&c";
+  const ent = makeRedactor(punct);
+  for (const chars of ["&", "&<", '&<>"\'']) {
+    const escaped = punct.replace(new RegExp(`[${chars}]`, "g"), (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch);
+    const out = ent.redact(escaped);
+    assert.ok(!out.includes(punct) && !out.includes(escaped), `variant ${chars} should be fully replaced`);
+    assert.ok(out.includes(PASSWORD_REDACTED), `variant ${chars} should be replaced, not dropped`);
+  }
 });
 
 test("buildActionSpace offers fill_password only when a password source is active", () => {
@@ -178,6 +198,22 @@ test("readHandoffSecret rejects the attack shapes", async () => {
   await mkdir(subdir, { mode: 0o700 });
   await assert.rejects(() => readHandoffSecret(subdir, dir), /regular file/); // a directory, not a file
 
+  // Nested paths are refused outright: an intermediate symlink directory
+  // could otherwise redirect a basename-only rule anywhere on disk.
+  const nestedFile = join(subdir, "pw");
+  await writeFile(nestedFile, "super-secret-value", { mode: 0o600 });
+  await assert.rejects(() => readHandoffSecret(nestedFile, dir), /directly inside/);
+
+  // A handoff directory that is itself a symlink to a valid-looking directory.
+  const realDir = await mkdtemp(join(tmpdir(), "jev-real-"));
+  await chmod(realDir, 0o700);
+  const realFile = join(realDir, "pw");
+  await writeFile(realFile, "super-secret-value", { mode: 0o600 });
+  const linkedDir = join(dir, "linkeddir");
+  await symlink(realDir, linkedDir);
+  await assert.rejects(() => readHandoffSecret(join(linkedDir, "pw"), dir), /absolute|inside/);
+  await rm(realDir, { recursive: true, force: true });
+
   const linked = join(dir, "linked");
   await symlink(good, linked);
   await assert.rejects(() => readHandoffSecret(linked, dir), /symlink|ELOOP|no such/i);
@@ -185,6 +221,13 @@ test("readHandoffSecret rejects the attack shapes", async () => {
   const loose = join(dir, "loose");
   await writeFile(loose, "super-secret-value", { mode: 0o644 });
   await assert.rejects(() => readHandoffSecret(loose, dir), /0600/);
+  await assert.rejects(() => stat(loose), /ENOENT/); // one-shot: consumed even on rejection
+
+  const hardlinked = join(dir, "hard");
+  const hardSource = join(dir, "hardsrc");
+  await writeFile(hardSource, "super-secret-value", { mode: 0o600 });
+  await link(hardSource, hardlinked);
+  await assert.rejects(() => readHandoffSecret(hardlinked, dir), /hard links/);
 
   const empty = join(dir, "empty");
   await writeFile(empty, "", { mode: 0o600 });
@@ -195,6 +238,11 @@ test("readHandoffSecret rejects the attack shapes", async () => {
   await assert.rejects(() => readHandoffSecret(big, dir), /exceeds/);
 
   await rm(dir, { recursive: true, force: true });
+});
+
+test("validateSecretBuffer counts code points, not UTF-16 units", () => {
+  assert.throws(() => validateSecretBuffer(Buffer.from("🐟🐟")), /shorter/); // 2 code points, 4 UTF-16 units
+  assert.equal(validateSecretBuffer(Buffer.from("🐟🐟xy")), "🐟🐟xy"); // 4 code points, passes
 });
 
 test("readSecretFromEnv enforces the JEV_PASSWORD_ prefix before lookup", () => {
@@ -208,17 +256,24 @@ test("readSecretFromEnv enforces the JEV_PASSWORD_ prefix before lookup", () => 
 });
 
 test("assertNoPlaywrightDebug refuses debug modes that log filled values", () => {
-  const saved = { PWDEBUG: process.env.PWDEBUG, DEBUG: process.env.DEBUG };
+  const saved = { PWDEBUG: process.env.PWDEBUG, DEBUG: process.env.DEBUG, DEBUG_FILE: process.env.DEBUG_FILE };
   try {
     process.env.PWDEBUG = "1";
     assert.throws(() => assertNoPlaywrightDebug(), /PWDEBUG/);
     delete process.env.PWDEBUG;
-    process.env.DEBUG = "pw:api";
-    assert.throws(() => assertNoPlaywrightDebug(), /pw:api/);
-    process.env.DEBUG = "app,pw:channel";
-    assert.throws(() => assertNoPlaywrightDebug(), /pw:channel/);
-    process.env.DEBUG = "app,pw:something-else"; // other pw: namespaces are fine
-    assertNoPlaywrightDebug();
+
+    // Wildcards and mixed specs include Playwright's namespaces, so any
+    // nonempty DEBUG is refused: exact deny-lists are unreliable here.
+    for (const spec of ["pw:api", "app,pw:channel", "*", "pw:*", "app pw:api", "app,pw:something-else"]) {
+      process.env.DEBUG = spec;
+      assert.throws(() => assertNoPlaywrightDebug(), /DEBUG/, spec);
+    }
+    process.env.DEBUG = "";
+    assertNoPlaywrightDebug(); // explicitly empty is fine
+    delete process.env.DEBUG;
+
+    process.env.DEBUG_FILE = "/tmp/pw-debug.log";
+    assert.throws(() => assertNoPlaywrightDebug(), /DEBUG_FILE/);
   } finally {
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k];

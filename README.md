@@ -156,7 +156,7 @@ That must be an exact origin (scheme, host, port; no wildcards; http is allowed 
 
 Then pipe the secret in per run. Any producer that can print bytes works: 1Password, Bitwarden, `pass`, LastPass, the macOS Keychain, `secret-tool`, Vault, a plain file, or an environment variable you already have.
 
-**MCP, via a one-shot handoff file.** The server only accepts files inside its handoff directory (default `~/.jev-browser/handoff`, mode 0700), validates them, and deletes them at run start:
+**MCP, via a one-shot handoff file.** The server only accepts files placed directly inside its handoff directory (default `~/.jev-browser/handoff`, mode 0700), validates them (owner, mode 0600, single link, no symlinks, sane size), and deletes them at run start:
 
 ```bash
 mkdir -p ~/.jev-browser/handoff && chmod 700 ~/.jev-browser/handoff
@@ -204,7 +204,7 @@ Rules and limits of the mechanism, stated plainly:
 - Handoff files are one-shot: read and unlinked at run start. Recreate the file for every run.
 - The mechanism needs the agent's shell and the MCP server to share a filesystem. It does not protect against a host agent that reads the file itself or runs your secret manager without redirection; treat the `op read` command as operator-approved.
 - The trusted origin can read and transmit the password, and its pages can submit from an input event with no Enter key. Origin binding does not make a compromised site safe.
-- Redaction is defense in depth: raw, URL-encoded, and HTML-encoded echoes of the value are scrubbed from everything the run returns. It cannot cover arbitrary transformations, process-memory inspection, or OS-level monitoring. Credential runs refuse Playwright debug modes (`PWDEBUG`, `pw:api`) and video recording for the same reason.
+- Redaction is defense in depth: raw, percent-encoded, form-encoded, and HTML-encoded echoes of the value are scrubbed from everything the run returns, including values a page reflects into its own labels, attributes, console output, or URLs after the fill. It cannot cover arbitrary transformations, process-memory inspection, or OS-level monitoring. For the same reason, credential runs refuse any Playwright debug output (`PWDEBUG`, any nonempty `DEBUG`, `DEBUG_FILE`) and video recording.
 - Two password fields (login and confirmation) receive the same value; this is for logging in, not for setting new passwords. `allow_typing: false` disables the feature entirely.
 
 ## The tool

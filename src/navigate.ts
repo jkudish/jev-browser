@@ -21,7 +21,7 @@ import {
   selectorFor,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
-import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, type Redactor } from "./password.js";
+import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, MAX_SECRET_BYTES, type Redactor } from "./password.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
@@ -205,9 +205,9 @@ async function generateTextToType(
 }
 
 // ── Extraction: DOM-first (a11y trees under-report inputs) ───────────────────
-async function extractAndStamp(page: Page, bounded: (cap: number) => number): Promise<RawElement[]> {
+async function extractAndStamp(page: Page, bounded: (cap: number) => number, captureCap = 512): Promise<RawElement[]> {
   return page.evaluate(
-    () => {
+    (cap: number) => {
       // Clear stamps from previous steps first: elements that dropped out of
       // the candidate list keep their old data-jev-id, which would make
       // selectors match more than one element.
@@ -255,7 +255,7 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
             el.textContent ||
             "",
         );
-        const href = tag === "a" ? el.getAttribute("href") || "" : "";
+        const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap) : "";
         const clickable =
           ["a", "button"].includes(tag) ||
           ["button", "link"].includes(roleAttr) ||
@@ -274,14 +274,14 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
         const options =
           tag === "select"
             ? Array.from((el as unknown as HTMLSelectElement).options)
-                .map((o) => (o.label || o.value || "").trim())
+                .map((o) => (o.label || o.value || "").trim().slice(0, cap))
                 .filter(Boolean)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
       }
       return out;
-    });
+    }, captureCap);
 }
 
 interface Observables {
@@ -292,15 +292,15 @@ interface Observables {
   excerpt: string;
 }
 
-async function pageObservables(page: Page, bounded: (cap: number) => number): Promise<Observables> {
+async function pageObservables(page: Page, bounded: (cap: number) => number, excerptCap = 1500): Promise<Observables> {
   const url = page.url();
   const title = await page.title().catch(() => "");
   const data = await page
-    .evaluate(() => ({
+    .evaluate((cap: number) => ({
       length: document.body?.innerText?.length ?? 0,
       scrollY: window.scrollY,
-      excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 1500),
-    }))
+      excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, cap),
+    }), excerptCap)
     .catch(() => ({ length: 0, scrollY: 0, excerpt: "" }));
   return { url, title, textLength: data.length, scrollY: data.scrollY, excerpt: data.excerpt };
 }
@@ -381,6 +381,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     redactor = makeRedactor(options.password.value);
   }
   const R = (s: string): string => redactor?.redact(s) ?? s;
+  // Credential runs capture longer strings in-page so that host-side
+  // redaction sees the whole echo before any display cap slices it: a
+  // password can be up to MAX_SECRET_BYTES long, and a slice taken before
+  // redaction would keep a prefix of it.
+  const captureCap = redactor ? MAX_SECRET_BYTES + 64 : 512;
+  const excerptCap = redactor ? MAX_SECRET_BYTES + 64 : 1500;
 
   const steps: StepRecord[] = [];
   const consoleEvents: ConsoleEvent[] = [];
@@ -388,8 +394,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const currentStep = { n: 0 };
   const extractionProblems: string[] = [];
   // Set immediately before a fill is attempted: even a failed fill counts as
-  // exposed, so the final screenshot stays suppressed.
+  // exposed, so the final screenshot stays suppressed. passwordFilled is set
+  // only when a fill actually landed; a refused fill (wrong origin, element
+  // changed) must not report success.
   let credentialUsed = false;
+  let passwordFilled = false;
 
   let browser: Browser | null = null;
   let status = "error";
@@ -403,17 +412,19 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   };
 
   const attachPageObservers = (p: Page) => {
+    // Redaction happens on the full string before any cap: a truncated echo
+    // of the secret would otherwise survive the slice boundary.
     p.on("console", (msg) => {
       const type = msg.type();
       if (type !== "error" && type !== "warning") return;
-      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: R(msg.text().slice(0, 300)), page: R(p.url().slice(0, 120)) });
+      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: R(msg.text()).slice(0, 300), page: R(p.url()).slice(0, 120) });
     });
-    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: R(String(err).slice(0, 300)), page: R(p.url().slice(0, 120)) }));
+    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: R(String(err)).slice(0, 300), page: R(p.url()).slice(0, 120) }));
     p.on("requestfailed", (req) =>
       recordEvent({
         type: "request_failed",
-        text: R(`${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300)),
-        page: R(p.url().slice(0, 120)),
+        text: R(`${req.method()} ${req.url()} ${req.failure()?.errorText ?? ""}`).slice(0, 300),
+        page: R(p.url()).slice(0, 120),
       }),
     );
   };
@@ -438,7 +449,6 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
 
     let lastExecuted: string | null = null;
-    let lastOutcome: string | null = null;
     // Machine state for repeat recovery, decoupled from the display string:
     // "typed" (a fill happened but the page did not change) and "no_change"
     // (nothing observable happened) both make a repeat proposal redundant.
@@ -452,9 +462,19 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         break;
       }
 
-      const raw = await extractAndStamp(page, bounded);
+      const raw = await extractAndStamp(page, bounded, captureCap);
+      // A page that already holds the value can echo it into any extracted
+      // string (labels, hrefs, option text). Scrub host-side before the
+      // action space or any model-facing state is built from these.
+      if (redactor) {
+        for (const el of raw) {
+          el.text = R(el.text);
+          el.href = R(el.href);
+          if (el.options) el.options = el.options.map((o) => R(o));
+        }
+      }
       const { elements, truncated } = buildActionSpace(raw, { passwordActive: allowTyping && Boolean(options.password) });
-      const observables = await pageObservables(page, bounded);
+      const observables = await pageObservables(page, bounded, excerptCap);
 
       // Empty action space is still judged normally: controls-only criteria
       // (scroll/back/done) plus the page excerpt. goal_done can and should
@@ -462,7 +482,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const state = {
         task,
         current_page: { url: R(observables.url), title: R(observables.title) },
-        page_text_excerpt: R(observables.excerpt),
+        page_text_excerpt: R(observables.excerpt).slice(0, STATE_EXCERPT_CHARS),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
         element_list_truncated: truncated,
         no_interactive_elements: elements.length === 0,
@@ -568,28 +588,40 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           if (!options.password || !trustedOrigin) {
             actionError = "no password source is active";
           } else {
-            // Revalidate as close to the fill as the protocol allows: a fresh
-            // read of the element's type and the page origin on the same
-            // handle that will receive the value.
+            // The check and the fill run as ONE in-page task on the element
+            // the locator resolved: type, connectedness, and page origin are
+            // read and the value written inside the same JS task, so no
+            // navigation or DOM mutation can interleave between validation
+            // and assignment. The value is set through the native setter and
+            // announced with input/change events, matching fill() semantics
+            // for framework-controlled inputs.
+            credentialUsed = true; // even a failed attempt suppresses the screenshot
             const handle = page.locator(selectorFor(element));
-            const check = await handle
-              .evaluate((el) => {
-                const input = el as HTMLInputElement;
-                return {
-                  isPassword: input.tagName === "INPUT" && input.type === "password",
-                  origin: window.location.origin,
-                };
-              })
+            const fill = await handle
+              .evaluate((el, args) => {
+                const input = el;
+                if (!(input instanceof HTMLInputElement) || input.type !== "password" || !input.isConnected) {
+                  return { ok: false as const, reason: "not_password_input" as const };
+                }
+                if (window.location.origin !== args.trustedOrigin) {
+                  return { ok: false as const, reason: "origin_mismatch" as const, origin: window.location.origin };
+                }
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+                if (setter) setter.call(input, args.value);
+                else input.value = args.value;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+                return { ok: true as const };
+              }, { trustedOrigin, value: options.password.value })
               .catch(() => null);
-            if (!check?.isPassword) {
+            if (!fill) {
+              actionError = "password fill failed; the element disappeared or the page navigated";
+            } else if (!fill.ok && fill.reason === "origin_mismatch") {
+              actionError = `origin_mismatch: refused to fill on ${fill.origin}; the password is bound to ${trustedOrigin}`;
+            } else if (!fill.ok) {
               actionError = "element is no longer a native password input";
-            } else if (check.origin !== trustedOrigin) {
-              actionError = `origin_mismatch: refused to fill on ${check.origin}; the password is bound to ${trustedOrigin}`;
             } else {
-              // Exposed is marked before the attempt: even a failed fill
-              // suppresses the final screenshot.
-              credentialUsed = true;
-              await handle.fill(options.password.value, { timeout: bounded(4_000) });
+              passwordFilled = true;
               const pwLabel = element.description.match(/"([^"]*)"/)?.[1] ?? "password";
               detail = `filled password into "${pwLabel}"; not submitted`;
             }
@@ -600,7 +632,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         }
       } catch (error) {
         if (controller.signal.aborted) throw error; // deadline/cancellation propagates
-        actionError = R((error as Error).message.slice(0, 160));
+        actionError = R((error as Error).message).slice(0, 160);
       }
 
       await settle(page, bounded);
@@ -611,7 +643,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         detail += " (followed new tab)";
       }
 
-      const after = await pageObservables(page, bounded);
+      const after = await pageObservables(page, bounded, excerptCap);
       // Execution failures are attributed to the action, not to ambient page
       // changes that happened to occur in the same window.
       const pageUnchanged =
@@ -639,21 +671,20 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       lastRedundant = pageUnchanged ? (typedIntoLabel !== null ? "typed" : "no_change") : null;
 
       lastExecuted = chosen;
-      lastOutcome = outcome;
-      history.push({ step, action: chosen, outcome });
+      history.push({ step, action: chosen, outcome: R(outcome) });
       steps.push({
         ...base,
         executed_action: chosen,
         detail: R(detail),
         recovery_reason: recoveryReason,
         action_error: actionError ? R(actionError) : undefined,
-        outcome,
+        outcome: R(outcome),
       });
 
       if (step === maxSteps) status = "max_steps";
     }
 
-    const finalObservables = await pageObservables(page, bounded);
+    const finalObservables = await pageObservables(page, bounded, excerptCap);
     let payload: { truncated: boolean; true_length: number; content: string } | null = null;
     let screenshotBase64: string | null = null;
     let screenshotSuppressed: "credential-fill" | undefined;
@@ -678,7 +709,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
     await browser.close().catch(() => {});
     const videoPath = (await videoPathPromise?.catch(() => undefined)) ?? null;
-    return {
+    const result = {
       status,
       video_path: videoPath,
       final_url: R(finalObservables.url),
@@ -694,14 +725,19 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       elapsed_ms: Math.round(performance.now() - started),
       model: budget.model,
       jev_provider: budget.provider,
-      password_filled: credentialUsed || undefined,
+      password_filled: passwordFilled || undefined,
       screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
     };
+    // Final boundary: a deep pass over everything this run returns, so no
+    // field added later (payloads, traces, problems) can echo the value in any
+    // representation the redactor knows. Earlier R() calls stay: they keep the
+    // model-facing inputs clean during the run, not just its outputs.
+    return redactor ? redactor.redactDeep(result) : result;
   } catch (runError) {
     const aborted = controller.signal.aborted;
     status = aborted && String((runError as Error).message).includes("deadline") ? "timeout" : "error";
-    return {
+    const failure = {
       status,
       error: R(aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message),
       steps,
@@ -712,6 +748,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       model: budget.model,
       jev_provider: budget.provider,
     };
+    return redactor ? redactor.redactDeep(failure) : failure;
   } finally {
     clearTimeout(deadlineTimer);
     externalSignal?.removeEventListener("abort", onExternalAbort);

@@ -165,7 +165,7 @@ import { mkdtemp, mkdir, writeFile, chmod, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SECRET = "e2e-hunter-two";
+const SECRET = "e2e pw!&q=1";
 
 async function serveFixture(name) {
   const { createServer } = await import("node:http");
@@ -181,7 +181,18 @@ async function serveFixture(name) {
 
 function assertNoSecret(result, body) {
   const haystack = JSON.stringify(body) + JSON.stringify(result.content ?? []);
-  assert.ok(!haystack.includes(SECRET), "the password leaked into the tool result");
+  // Raw plus the encodings a page realistically echoes back: percent,
+  // form-URL-encoded, and the partial/full HTML-entity serializations.
+  const echoes = [
+    SECRET,
+    encodeURIComponent(SECRET),
+    new URLSearchParams({ x: SECRET }).toString().slice(2),
+    SECRET.replace(/&/g, "&amp;"),
+    SECRET.replace(/([&<>"'])/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c),
+  ];
+  for (const echo of echoes) {
+    assert.ok(!haystack.includes(echo), `the password leaked into the tool result (${echo === SECRET ? "raw" : "encoded"})`);
+  }
 }
 
 test("password fill: handoff file consumed, filled, never submitted, never leaked", { skip: !hasKey }, async () => {
@@ -216,6 +227,13 @@ test("password fill: handoff file consumed, filled, never submitted, never leake
         assert.ok(!result.content.some((b) => b.type === "image"), "screenshot must be suppressed after a fill");
         assert.ok(body.page.content.includes("PW_FILLED"), "the page should show the fill marker");
         assert.ok(!body.page.content.includes("SUBMITTED"), "the form must never be submitted by a fill");
+        // The fixture echoes the value into a visible link, an attribute, and
+        // console.error: every reflection must come back redacted, in the
+        // payload and in captured console events.
+        assert.ok(body.page.content.includes("mirror: [REDACTED]"), "a reflected echo must be redacted in the payload");
+        const echo = (body.console_events ?? []).find((e) => e.type === "console_error");
+        assert.ok(echo, "the fixture's console.error echo should be captured");
+        assert.match(echo.text, /echo: \[REDACTED\]/);
         assertNoSecret(result, body);
       },
       { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_BROWSER_HANDOFF_DIR: dir },

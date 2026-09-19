@@ -4,7 +4,7 @@
 // and is redacted from every model-facing and serialized output. It must
 // never appear in argv, tool arguments, the task, model context, traces,
 // screenshots, or error messages.
-import { chmod, lstat, mkdir, open, readFile, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, realpath, unlink } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -43,15 +43,35 @@ export function handoffDir(): string {
 
 /** The handoff directory must be a private directory owned by this user. */
 export async function ensureHandoffDir(dir = handoffDir()): Promise<void> {
-  const st = await lstat(dir).catch(() => null);
-  if (!st) {
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    await chmod(dir, 0o700).catch(() => {});
-    return;
+  const resolved = resolve(dir);
+  const st = await lstat(resolved).catch(() => null);
+  if (st) {
+    if (!st.isDirectory()) throw new Error(`handoff directory ${resolved} is not a directory`);
+    if (st.uid !== process.getuid!()) throw new Error(`handoff directory ${resolved} is not owned by this user`);
+    if ((st.mode & 0o777) !== 0o700) {
+      throw new Error(`handoff directory ${resolved} must be mode 0700; run chmod 700 on it or point JEV_BROWSER_HANDOFF_DIR elsewhere`);
+    }
+  } else {
+    await mkdir(resolved, { recursive: true, mode: 0o700 });
+    await chmod(resolved, 0o700);
   }
-  if (!st.isDirectory()) throw new Error(`handoff directory ${dir} is not a directory`);
-  if (st.uid !== process.getuid!()) throw new Error(`handoff directory ${dir} is not owned by this user`);
-  if (st.mode & 0o077) throw new Error(`handoff directory ${dir} must be mode 0700; fix it or point JEV_BROWSER_HANDOFF_DIR elsewhere`);
+  // Revalidate what actually landed. mkdir mode is umask-masked, parents may
+  // have been created by a looser rule, and a symlink anywhere in the chain
+  // (the dir itself or a parent, pre-existing or fresh) would let a
+  // basename-only file rule escape the intended location: the resolved real
+  // path must equal the lexical one. lstat above only guards the final
+  // component, so realpath is what closes intermediate symlinks.
+  const real = await realpath(resolved).catch(() => null);
+  const after = await lstat(resolved).catch(() => null);
+  if (
+    real === null ||
+    real !== resolved ||
+    !after?.isDirectory() ||
+    after.uid !== process.getuid!() ||
+    (after.mode & 0o777) !== 0o700
+  ) {
+    throw new Error(`handoff directory ${resolved} must be a symlink-free 0700 directory owned by this user`);
+  }
 }
 
 /**
@@ -69,7 +89,8 @@ export function validateSecretBuffer(buf: Buffer, label = "password"): string {
     throw new Error(`${label} is not valid UTF-8 text`);
   }
   if (text.includes("\u0000")) throw new Error(`${label} contains a NUL byte`);
-  if (text.length < MIN_SECRET_CHARS) throw new Error(`${label} is shorter than ${MIN_SECRET_CHARS} characters`);
+  // Code points, not UTF-16 units: two emoji must not count as four characters.
+  if ([...text].length < MIN_SECRET_CHARS) throw new Error(`${label} is shorter than ${MIN_SECRET_CHARS} characters`);
   return text;
 }
 
@@ -91,35 +112,44 @@ export async function readSecretFromStdin(): Promise<Buffer> {
 }
 
 /**
- * Consumes a one-shot handoff file. The path must be absolute and inside the
- * handoff directory. The file is opened with O_NOFOLLOW (symlinks fail),
- * validated as a private regular file owned by this user with a single link,
- * unlinked, and only then read through the already-open descriptor. The file
- * is always unlinked once opened, even if a later check fails.
+ * Consumes a one-shot handoff file. The path must be a plain absolute path
+ * naming a direct child of the handoff directory: no subdirectories, no "..",
+ * no traversal. The file is opened with O_NOFOLLOW (symlinks fail), validated
+ * as a private regular file owned by this user with exactly mode 0600 and a
+ * single link, its identity re-checked against the pathname, unlinked, and
+ * only then read through the already-open descriptor. Once opened, the file
+ * is always unlinked, even when a later check fails: it is one-shot, and a
+ * rejected secret must not be left on disk.
  */
 export async function readHandoffSecret(path: string, dir = handoffDir()): Promise<Buffer> {
   if (!isAbsolute(path)) throw new Error("password_file must be an absolute path inside the handoff directory");
   const resolvedPath = resolve(path);
   const resolvedDir = resolve(dir);
   const rel = relative(resolvedDir, resolvedPath);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-    throw new Error(`password_file must be a file inside the handoff directory ${resolvedDir}`);
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || rel.includes("/") || rel.includes("\\")) {
+    throw new Error(`password_file must be a file directly inside the handoff directory ${resolvedDir}, not a nested path`);
   }
   await ensureHandoffDir(resolvedDir);
   const fh = await open(resolvedPath, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  let unlinked = false;
   try {
     const st = await fh.stat(); // fstat on the pinned descriptor
     if (!st.isFile()) throw new Error("password_file is not a regular file");
     if (st.uid !== process.getuid!()) throw new Error("password_file is not owned by this user");
-    if (st.mode & 0o077) throw new Error("password_file must be readable by its owner only (mode 0600)");
+    if ((st.mode & 0o777) !== 0o600) throw new Error("password_file must be mode 0600; run chmod 600 on it and retry");
     if (st.nlink !== 1) throw new Error("password_file has multiple hard links");
     if (st.size === 0) throw new Error("password_file is empty");
     if (st.size > MAX_SECRET_BYTES) throw new Error(`password_file exceeds ${MAX_SECRET_BYTES} bytes`);
+    // The pathname must still name this exact inode: a replacement between
+    // open and unlink would delete a different file than the one validated.
     const named = await lstat(resolvedPath).catch(() => null);
     if (!named || named.ino !== st.ino || named.dev !== st.dev) {
       throw new Error("password_file was replaced while opening; retry with a fresh file");
     }
     await unlink(resolvedPath);
+    unlinked = true;
+    const post = await fh.stat();
+    if (post.nlink !== 0) throw new Error("password_file still has links after being consumed; refusing to trust it");
     const buf = Buffer.alloc(st.size);
     let read = 0;
     while (read < st.size) {
@@ -128,6 +158,9 @@ export async function readHandoffSecret(path: string, dir = handoffDir()): Promi
       read += bytesRead;
     }
     return buf.subarray(0, read);
+  } catch (error) {
+    if (!unlinked) await unlink(resolvedPath).catch(() => {}); // one-shot even on failure
+    throw error;
   } finally {
     await fh.close().catch(() => {});
   }
@@ -151,9 +184,12 @@ export function readSecretFromEnv(name: string): Buffer {
 }
 
 /**
- * Playwright debug modes (PWDEBUG, pw:api/pw:channel/pw:protocol logging) can
- * record raw fill() values outside this package's redaction boundary.
- * Credential runs refuse them up front.
+ * Playwright debug modes can record raw fill() values outside this package's
+ * redaction boundary: PWDEBUG, the `debug` library namespaces Playwright logs
+ * through (pw:api, pw:channel, pw:protocol, and wildcard specs like `*` that
+ * include them), and DEBUG_FILE which redirects those logs to disk. Wildcard
+ * semantics make an exact deny-list unreliable, so credential runs refuse any
+ * nonempty DEBUG and DEBUG_FILE outright.
  */
 export function assertNoPlaywrightDebug(): void {
   const pwdebug = process.env.PWDEBUG;
@@ -161,8 +197,12 @@ export function assertNoPlaywrightDebug(): void {
     throw new Error("PWDEBUG is set; unset it for password runs (Playwright debug output can include filled values)");
   }
   const debug = process.env.DEBUG ?? "";
-  if (/(^|,)\s*pw:(api|channel|protocol)/.test(debug)) {
-    throw new Error("DEBUG enables pw:api, pw:channel, or pw:protocol; unset it for password runs (Playwright logs can include filled values)");
+  if (debug !== "") {
+    throw new Error("DEBUG is set (including wildcards like * or pw:*); unset it for password runs (Playwright logs can include filled values)");
+  }
+  const debugFile = process.env.DEBUG_FILE ?? "";
+  if (debugFile !== "") {
+    throw new Error("DEBUG_FILE is set; unset it for password runs (debug logs are written there unredacted)");
   }
 }
 
@@ -178,11 +218,22 @@ export interface Redactor {
  */
 export function makeRedactor(secret: string): Redactor {
   const variants = new Set<string>([secret]);
+  // Percent encodings: encodeURIComponent (both hex cases) and the stricter
+  // application/x-www-form-urlencoded serialization (space becomes +, more
+  // punctuation is escaped), which is what URLSearchParams and form submits
+  // produce.
   const pct = encodeURIComponent(secret);
   variants.add(pct);
   variants.add(pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
+  variants.add(new URLSearchParams({ x: secret }).toString().slice(2));
+  // HTML entity encodings: the full named-attribute form, the partial
+  // serializations real DOM APIs produce (textContent escapes only & and <;
+  // attribute serialization escapes & < > " '), and numeric references.
   const named: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-  variants.add(secret.replace(/[&<>"']/g, (c) => named[c]));
+  const esc = (chars: string) => secret.replace(new RegExp(`[${chars.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}]`, "g"), (c) => named[c]);
+  variants.add(esc("&"));
+  variants.add(esc("&<"));
+  variants.add(esc('&<>"\''));
   variants.add(Array.from(secret, (c) => `&#${c.codePointAt(0)!};`).join(""));
   variants.add(Array.from(secret, (c) => `&#x${c.codePointAt(0)!.toString(16)};`).join(""));
   const ordered = Array.from(variants)
