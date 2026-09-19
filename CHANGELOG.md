@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Library callers can pass an existing Playwright `Page` to `navigate()`, optionally omit `startUrl`, and retain ownership of the page, context, and browser lifecycle.
 - Public library entry: `import { navigate } from "@jkudish/jev-browser"` now works. The package root exports `navigate` and the `NavigateOptions`, `StepRecord`, `ConsoleEvent`, and `JevUsage` types side-effect free; the pre-existing `@jkudish/jev-browser/dist/navigate.js` deep import keeps working. The MCP server and CLI remain the `jev-browser` bin, and client configs are unchanged.
 - Model and provider are resolved per run instead of at import time, so importing the library has no configuration side effects and concurrent runs report their own provider and model, never another run's.
 - CLI recording scratch directories for `--record file.webm` are created under the OS temp directory and removed after the video is copied out, instead of leaking a `jev-browser-record-*` directory in the working directory.

@@ -142,6 +142,32 @@ console.log(result.status, result.final_url);
 console.log(result.page.content);
 ```
 
+### Reuse an existing Playwright page
+
+Pass an existing Playwright `Page` when the browser, context, or session is owned by your application. This is useful for logged-in sessions and for applications that already manage the browser lifecycle. When `page` is supplied, `startUrl` is optional; if both are supplied, navigation starts by going to `startUrl`. Jev Browser never closes the injected page, context, or browser.
+
+```js
+import { chromium } from "playwright";
+import { navigate } from "@jkudish/jev-browser";
+
+const browser = await chromium.launch({ headless: false });
+const context = await browser.newContext({ storageState: "./auth.json" });
+const page = await context.newPage();
+
+try {
+  const result = await navigate({
+    task: "Find the price of the Pro plan",
+    page,
+    maxSteps: 16,
+  });
+
+  if ("error" in result) throw new Error(result.error);
+  console.log(result.status, result.final_url);
+} finally {
+  await browser.close();
+}
+```
+
 ## The tool
 
 Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus one small LLM call per typed field when a typing provider is configured. The example below is a real run.

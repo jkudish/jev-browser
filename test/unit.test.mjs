@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { chromium } from "playwright";
 import {
   buildActionSpace,
   buildCriteria,
@@ -9,6 +10,7 @@ import {
   MAX_ELEMENTS,
   pickAlternate,
 } from "../dist/lib.js";
+import { navigate } from "../dist/navigate.js";
 
 const el = (over = {}) => ({
   attr: "j1",
@@ -85,4 +87,38 @@ test("pickAlternate returns next-best non-excluded option", () => {
 
 test("heuristicQuery strips task boilerplate", () => {
   assert.equal(heuristicQuery("Search Wikipedia for the article about Ristretto and stop on it"), "ristretto");
+});
+
+test("navigate reuses an injected Playwright page and leaves its lifecycle to the caller", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  page.setDefaultTimeout(1_234);
+  await page.setContent("<title>Existing session</title><main>Session content</main>");
+
+  try {
+    const result = await navigate({
+      task: "Read the page",
+      page,
+      maxSeconds: 0,
+      screenshot: "none",
+    });
+
+    assert.equal(result.status, "timeout");
+    assert.equal(result.final_title, "Existing session");
+    assert.match(result.page?.content ?? "", /Session content/);
+    assert.equal(page.getDefaultTimeout(), 1_234);
+    assert.equal(page.isClosed(), false);
+  } finally {
+    await browser.close();
+  }
 });

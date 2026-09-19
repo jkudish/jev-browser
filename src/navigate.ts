@@ -3,7 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -27,7 +27,10 @@ const STATE_EXCERPT_CHARS = 1_500;
 
 export interface NavigateOptions {
   task: string;
-  startUrl: string;
+  /** Start URL for an internally-created page. Omit when `page` is supplied. */
+  startUrl?: string;
+  /** Reuse an existing Playwright page instead of launching a new browser. */
+  page?: Page;
   maxSteps?: number;
   maxSeconds?: number;
   allowTyping?: boolean;
@@ -340,6 +343,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const extractionProblems: string[] = [];
 
   let browser: Browser | null = null;
+  let ownsBrowser = false;
+  let observedContext: BrowserContext | null = null;
+  let onNewPage: ((page: Page) => void) | null = null;
+  const observerCleanups: Array<() => void> = [];
   let status = "error";
 
   const recordEvent = (event: Omit<ConsoleEvent, "step">) => {
@@ -351,39 +358,58 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   };
 
   const attachPageObservers = (p: Page) => {
-    p.on("console", (msg) => {
+    const onConsole = (msg: ConsoleMessage) => {
       const type = msg.type();
       if (type !== "error" && type !== "warning") return;
       recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: msg.text().slice(0, 300), page: p.url().slice(0, 120) });
-    });
-    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: String(err).slice(0, 300), page: p.url().slice(0, 120) }));
-    p.on("requestfailed", (req) =>
+    };
+    const onPageError = (err: Error) => recordEvent({ type: "page_error", text: String(err).slice(0, 300), page: p.url().slice(0, 120) });
+    const onRequestFailed = (req: Request) =>
       recordEvent({
         type: "request_failed",
         text: `${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300),
         page: p.url().slice(0, 120),
-      }),
-    );
+      });
+    p.on("console", onConsole);
+    p.on("pageerror", onPageError);
+    p.on("requestfailed", onRequestFailed);
+    observerCleanups.push(() => {
+      p.off("console", onConsole);
+      p.off("pageerror", onPageError);
+      p.off("requestfailed", onRequestFailed);
+    });
   };
 
   try {
-    browser = await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
-    const context = await browser.newContext({
-      viewport: { width: 1024, height: 640 },
-      ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
-    });
+    if (!options.page && !startUrl) {
+      throw new Error("startUrl is required when page is not supplied");
+    }
+    ownsBrowser = !options.page;
+    browser = options.page ? null : await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
+    const context: BrowserContext = options.page
+      ? options.page.context()
+      : await browser!.newContext({
+          viewport: { width: 1024, height: 640 },
+          ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
+        });
+    observedContext = context;
     // No Playwright default (30s) may ever outlive the run budget.
-    context.setDefaultTimeout(8_000);
-    let page = await context.newPage();
+    if (ownsBrowser) {
+      context.setDefaultTimeout(8_000);
+    }
+    let page = options.page ?? (await context.newPage());
     const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
     let pendingPage: Page | null = null;
-    context.on("page", (p) => {
+    onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
       pendingPage = p;
-    });
+    };
+    context.on("page", onNewPage);
 
-    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+    if (startUrl) {
+      await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+    }
 
     let lastExecuted: string | null = null;
     let lastOutcome: string | null = null;
@@ -563,7 +589,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
     }
 
-    await browser.close().catch(() => {});
+    if (ownsBrowser) await browser?.close().catch(() => {});
     const videoPath = (await videoPathPromise?.catch(() => undefined)) ?? null;
     return {
       status,
@@ -600,7 +626,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   } finally {
     clearTimeout(deadlineTimer);
     externalSignal?.removeEventListener("abort", onExternalAbort);
-    await browser?.close().catch(() => {});
+    if (observedContext && onNewPage) observedContext.off("page", onNewPage);
+    for (const cleanup of observerCleanups.splice(0).reverse()) cleanup();
+    if (ownsBrowser) await browser?.close().catch(() => {});
   }
 }
 
