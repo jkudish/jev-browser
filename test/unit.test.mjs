@@ -129,6 +129,7 @@ test("validateSecretBuffer keeps exact bytes and rejects bad input", () => {
   assert.throws(() => validateSecretBuffer(Buffer.from("abc\r\ndef")), /line break/);
   assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\x01")), /control character/);
   assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\x7f")), /control character/);
+  assert.throws(() => validateSecretBuffer(Buffer.from("abcdef\x9f")), /control character/); // C1: YAML serializes these as \xNN escapes
   assert.throws(() => validateSecretBuffer(Buffer.from("abcd\tefgh")), /control character/);
   // A secret whose whitespace-normalized echo would fall below the safe
   // redaction length is rejected: pages echo values with collapsed
@@ -202,6 +203,16 @@ test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, de
   const singleEcho = single.replace(/'/g, "''");
   assert.ok(!sr.redact(`key: '${singleEcho}'`).includes(singleEcho));
   assert.ok(sr.redact(`key: '${singleEcho}'`).includes(PASSWORD_REDACTED));
+  // Playwright composes both stages: JSON.stringify the name (escaping
+  // quotes and backslashes), then YAML single-quote the assembled value
+  // (doubling apostrophes). A secret through both looks like
+  // ab''cd\"{ef and must match the composed variant.
+  const both = `ab'cd"{ef`;
+  const br = makeRedactor(both);
+  const composed = both.replace(/(["\\])/g, "\\$1").replace(/'/g, "''");
+  assert.notEqual(composed, both.replace(/'/g, "''")); // the stages really compose here
+  assert.ok(!br.redact(`key: '${composed}'`).includes(composed));
+  assert.ok(br.redact(`key: '${composed}'`).includes(PASSWORD_REDACTED));
   const zw = "ab\u200bcd\u00adef";
   const zr = makeRedactor(zw);
   const zwEcho = zw.replace(/[\u200b\u00ad]/g, "");

@@ -205,7 +205,7 @@ import { mkdtemp, mkdir, writeFile, chmod, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SECRET = "e2e 'pw'!&q=1"; // contains a single quote: the aria snapshot serializer doubles it inside quoted YAML
+const SECRET = "e2e 'p\"w'{&q=1"; // contains ', " and { so the aria snapshot serializer must both backslash-escape and YAML-quote the echoed name
 
 async function serveFixture(name) {
   const { createServer } = await import("node:http");
@@ -229,10 +229,12 @@ function assertNoSecret(result, body) {
     new URLSearchParams({ x: SECRET }).toString().slice(2),
     SECRET.replace(/&/g, "&amp;"),
     SECRET.replace(/([&<>"'])/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c),
-    // aria snapshots: single quotes double inside single-quoted YAML values,
-    // quotes and backslashes backslash-escape inside double-quoted ones.
+    // aria snapshots: the renderer JSON-escapes quotes and backslashes, then
+    // YAML single-quote-doubles the assembled value. Both stages compose, so
+    // assert each stage alone and the composed form.
     SECRET.replace(/'/g, "''"),
     SECRET.replace(/(["\\])/g, "\\$1"),
+    SECRET.replace(/(["\\])/g, "\\$1").replace(/'/g, "''"),
   ];
   for (const echo of echoes) {
     assert.ok(!haystack.includes(echo), `the password leaked into the tool result (${echo === SECRET ? "raw" : "encoded"})`);

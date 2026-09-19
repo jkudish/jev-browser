@@ -94,11 +94,11 @@ export function validateSecretBuffer(buf: Buffer, label = "password"): string {
   // filled faithfully, and a page echoing the stripped value back would
   // produce a string no redaction variant matches. Reject up front.
   if (/[\r\n]/.test(text)) throw new Error(`${label} contains a line break; password inputs strip CR/LF, so it could never be filled (produce it without the trailing newline, e.g. op read --no-newline)`);
-  // Control characters (and DEL) are JSON/YAML-escaped differently by every
-  // serializer that touches an echo (aria snapshots, markdown, console
-  // capture). Rather than chase each escape form, refuse them: no real
-  // password contains them.
-  if (/[\x00-\x1f\x7f]/.test(text)) throw new Error(`${label} contains a control character`);
+  // Control characters (C0, DEL, and C1) are JSON/YAML-escaped differently
+  // by every serializer that touches an echo (aria snapshots, markdown,
+  // console capture). Rather than chase each escape form, refuse them: no
+  // real password contains them.
+  if (/[\x00-\x1f\x7f-\x9f]/.test(text)) throw new Error(`${label} contains a control character`);
   // Code points, not UTF-16 units: two emoji must not count as four characters.
   if ([...text].length < MIN_SECRET_CHARS) throw new Error(`${label} is shorter than ${MIN_SECRET_CHARS} characters`);
   // Pages normalize whitespace when echoing (collapsed DOM text, trimmed
@@ -289,9 +289,13 @@ export function makeRedactor(secret: string): Redactor {
   // a secret containing one comes back as `ab\*cd` in markdown output.
   variants.add(secret.replace(/([\\`*_[\]])/g, "\\$1"));
   // ARIA snapshots serialize accessible names into quoted YAML strings:
-  // quotes and backslashes inside a name are backslash-escaped there, and
-  // single quotes are doubled when the assembled value needs single quoting.
-  variants.add(secret.replace(/(["\\])/g, "\\$1"));
+  // the renderer JSON-stringifies the name (escaping quotes and
+  // backslashes) and then YAML-quotes the assembled value (doubling
+  // single quotes). Playwright composes both, so the composed form is a
+  // variant; the individual forms cover other serializers.
+  const ariaName = secret.replace(/(["\\])/g, "\\$1");
+  variants.add(ariaName);
+  variants.add(ariaName.replace(/'/g, "''"));
   variants.add(secret.replace(/'/g, "''"));
   // Page-side pipelines normalize before we see the string: label resolution
   // collapses runs and trims, excerpts collapse, option labels trim, and
