@@ -505,15 +505,16 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const raw = await extractAndStamp(page, bounded, captureCaps, Boolean(options.password));
       // A page that already holds the value can echo it into any extracted
       // string (labels, hrefs, option text). Scrub host-side before the
-      // action space or any model-facing state is built from these, then
-      // re-apply the display limit: the capture window ran longer than the
-      // visible limit on purpose, and what survives redaction is safe but
-      // still longer than the model should see.
+      // action space or any model-facing state is built from these. These
+      // strings were captured longer than the display limit on purpose (so
+      // echoes starting inside the window are captured whole); they go
+      // through the position-preserving path so the display slice can never
+      // pull a partially captured echo into view.
       if (redactor) {
         for (const el of raw) {
-          el.text = R(el.text).slice(0, CREDENTIAL_VISIBLE.label);
-          el.href = R(el.href).slice(0, CREDENTIAL_VISIBLE.href);
-          if (el.options) el.options = el.options.map((o) => ({ i: o.i, label: R(o.label).slice(0, CREDENTIAL_VISIBLE.option) }));
+          el.text = redactor.redactCapped(el.text, CREDENTIAL_VISIBLE.label);
+          el.href = redactor.redactCapped(el.href, CREDENTIAL_VISIBLE.href);
+          if (el.options) el.options = el.options.map((o) => ({ i: o.i, label: redactor.redactCapped(o.label, CREDENTIAL_VISIBLE.option) }));
         }
       }
       const { elements, truncated } = buildActionSpace(raw, { passwordActive: allowTyping && Boolean(options.password) });
@@ -525,7 +526,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const state = {
         task: safeTask,
         current_page: { url: R(observables.url), title: R(observables.title) },
-        page_text_excerpt: R(observables.excerpt).slice(0, STATE_EXCERPT_CHARS),
+        page_text_excerpt: redactor
+          ? redactor.redactCapped(observables.excerpt, STATE_EXCERPT_CHARS)
+          : observables.excerpt.slice(0, STATE_EXCERPT_CHARS),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
         element_list_truncated: truncated,
         no_interactive_elements: elements.length === 0,

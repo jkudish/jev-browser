@@ -14,9 +14,6 @@ export const PASSWORD_ENV_PREFIX = "JEV_PASSWORD_";
 export const MAX_SECRET_BYTES = 4096;
 export const MIN_SECRET_CHARS = 4;
 export const PASSWORD_REDACTED = "[REDACTED]";
-/** Collision-safe fallback: shorter than MIN_SECRET_CHARS, so no accepted variant fits inside it. */
-export const PASSWORD_FALLBACK = "[X]";
-
 /**
  * Exact-origin check for the password trust anchor: scheme://host[:port]
  * with no path, query, credentials, or wildcard. HTTPS is required except on
@@ -250,6 +247,13 @@ export interface Redactor {
   redact(s: string): string;
   redactDeep(value: unknown): any;
   /**
+   * Redacts a string that was captured longer than it may be displayed and
+   * returns at most `visible` characters. Position-preserving: an echo the
+   * capture boundary cut mid-secret can never be pulled into the displayed
+   * slice by earlier echoes shrinking to markers.
+   */
+  redactCapped(s: string, visible: number): string;
+  /**
    * Length of the longest known representation of the secret. Capture
    * windows on credential runs are sized from this (visible limit + this
    * value), so an echo that starts inside the visible window is always
@@ -318,15 +322,48 @@ export function makeRedactor(secret: string): Redactor {
   const ordered = Array.from(variants)
     .filter((v) => v.length >= MIN_SECRET_CHARS)
     .sort((a, b) => b.length - a.length);
-  // The replacement must not itself contain the secret: a value like
-  // "REDACTED" (or a slice of it, e.g. "DACT") would survive inside
-  // "[REDACTED]". When any variant occurs in the standard marker, fall back
-  // to a marker shorter than MIN_SECRET_CHARS, which no accepted variant
-  // can fit inside.
-  const marker = ordered.some((v) => PASSWORD_REDACTED.includes(v)) ? PASSWORD_FALLBACK : PASSWORD_REDACTED;
+  // The output must never let the secret reassemble. A precomputed marker
+  // check is not enough: a secret built from marker characters ("ED][RE",
+  // "ED]next") can reappear when two inserted markers sit adjacent
+  // ("[REDACTED][REDACTED]") or when a marker sits next to page text that
+  // continues the secret. So every redact call enforces the postcondition
+  // that no variant survives in its output. When the standard marker fails
+  // it, the call re-runs from the original string with a single-character
+  // marker whose character appears in no variant: no occurrence can then
+  // include or span an inserted marker, which makes reassembly impossible.
+  // Normal secrets keep the readable "[REDACTED]" marker.
+  const variantChars = new Set<string>();
+  for (const v of ordered) for (const ch of v) variantChars.add(ch);
+  const blocker = ["\u2588", "\uE000", "\uE001", "\uE002", "\uE003"].find((c) => !variantChars.has(c))!;
+  const escapeRe = (ch: string) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const survivors = (s: string): boolean => ordered.some((v) => s.includes(v));
   const redact = (s: string): string => {
-    for (const v of ordered) s = s.split(v).join(marker);
-    return s;
+    let out = s;
+    for (const v of ordered) out = out.split(v).join(PASSWORD_REDACTED);
+    if (survivors(out)) {
+      out = s;
+      for (const v of ordered) out = out.split(v).join(blocker);
+    }
+    return out;
+  };
+  // Capture-window redaction for strings captured longer than they may be
+  // displayed (visible limit + maxVariantLength). Plain redact shrinks each
+  // echo to a short marker, which would pull text that sat beyond the display
+  // limit — including an echo the capture boundary cut mid-secret, which no
+  // variant matches — into the displayed slice. Replacing each variant with a
+  // same-length placeholder keeps every position stable across the slice;
+  // placeholder runs are collapsed to the display marker only afterwards. A
+  // run truncated by the slice still collapses, so no fragment of an echo can
+  // survive the boundary, and the collapsed output is held to the same
+  // postcondition as redact.
+  const phRun = new RegExp(`${escapeRe(blocker)}+`, "g");
+  const redactCapped = (s: string, visible: number): string => {
+    let out = s;
+    for (const v of ordered) out = out.split(v).join(blocker.repeat(v.length));
+    const sliced = out.slice(0, visible);
+    let display = sliced.replace(phRun, PASSWORD_REDACTED);
+    if (survivors(display)) display = sliced.replace(phRun, blocker);
+    return display;
   };
   const redactDeep = (value: unknown, depth = 0): any => {
     if (depth > 12) return value;
@@ -339,7 +376,7 @@ export function makeRedactor(secret: string): Redactor {
     }
     return value;
   };
-  return { redact, redactDeep, maxVariantLength: ordered[0]?.length ?? 0 };
+  return { redact, redactDeep, redactCapped, maxVariantLength: ordered[0]?.length ?? 0 };
 }
 
 /** Reads a secret from an arbitrary local path (CLI only; the caller is human). */

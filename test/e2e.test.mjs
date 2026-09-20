@@ -371,6 +371,7 @@ test("password fill: wrong-origin pages are refused and the value never lands", 
         assert.equal(body.screenshot_suppressed, "credential-fill"); // even a refused fill attempt suppresses it
         assert.ok(!body.page.content.includes("PW_FILLED"), "nothing may be filled on the wrong origin");
         assert.ok(!body.page.content.includes("SUBMITTED"));
+        assert.ok(!result.content.some((b) => b.type === "image"), "no screenshot image block may travel on a credential run");
         assertNoSecret(result, body);
       },
       // Trust anchor points elsewhere: every fill on the fixture origin is refused.
@@ -455,6 +456,28 @@ test("password fill: CLI stdin path works and never leaks the secret", { skip: !
   } finally {
     await fixture.close();
   }
+});
+
+test("password fill: PWDEBUG is refused before any browser or Jev work", async () => {
+  // The preflight runs inside the CLI's credential-setup block, before
+  // stdin is read or any browser/Jev client exists: the run must fail fast
+  // with the debug refusal, with no API key needed.
+  const child = spawn(
+    process.execPath,
+    [
+      serverPath, "run",
+      "x", "https://example.com/",
+      "--password-file", "-",
+      "--password-origin", "https://acme.com",
+    ],
+    { env: { ...process.env, PWDEBUG: "1", TYPESAFE_API_KEY: "" } },
+  );
+  child.stdin.end();
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  assert.notEqual(code, 0);
+  assert.match(stderr, /password source: .*PWDEBUG/);
 });
 
 test("password fill: misconfigured handoff files fail loudly, before any browser", async () => {

@@ -231,6 +231,60 @@ test("redactor covers raw, URL-encoded, form-encoded, and HTML-entity echoes, de
   }
 });
 
+test("redaction never lets the secret reassemble across markers", () => {
+  // A secret built from marker characters reappears inside two adjacent
+  // markers: "[REDACTED][REDACTED]" contains "ED][RE". The postcondition
+  // must catch it and fall back to the single-character marker.
+  const adjacent = makeRedactor("ED][RE");
+  const adjOut = adjacent.redact(`a${"ED][RE"}${"ED][RE"}b`);
+  assert.ok(!adjOut.includes("ED][RE"), "adjacent echoes must not reassemble the secret across markers");
+  assert.ok(!adjOut.includes("REDACTED"), "the fallback marker must not look like the standard one here");
+
+  // A secret shaped like marker-suffix + following text reappears when the
+  // marker lands right before text that continues it.
+  const span = makeRedactor("ED]next");
+  const spanOut = span.redact(`${"ED]next"}next steps`);
+  assert.ok(!spanOut.includes("ED]next"), "a marker plus adjacent text must not reassemble the secret");
+  assert.ok(!spanOut.includes("REDACTED"), "the fallback marker must not look like the standard one here");
+
+  // A secret contained in the standard marker itself ("DACT" inside
+  // "[REDACTED]") is the same class, one occurrence deep.
+  const inner = makeRedactor("DACT");
+  const innerOut = inner.redact(`x DACT y`);
+  assert.ok(!innerOut.includes("DACT"));
+
+  // Normal secrets keep the readable marker, and redaction stays idempotent.
+  const normal = makeRedactor("hunter2!");
+  const once = normal.redact(`pre hunter2! mid ${encodeURIComponent("hunter2!")} post`);
+  assert.ok(once.includes(PASSWORD_REDACTED));
+  assert.equal(normal.redact(once), once);
+});
+
+test("redactCapped keeps a partially captured echo out of the visible slice", () => {
+  const secret = "sup3rs3cr3tvalu3!";
+  const { redactCapped } = makeRedactor(secret);
+  // Simulate a capture window: visible limit 40, echo at the start, filler,
+  // then an echo the capture boundary cut mid-secret starting at position 41 —
+  // inside the reach a plain redact's shrinkage (16 chars to a 10-char
+  // marker) would pull into the displayed slice.
+  const visible = 40;
+  const captured = `${secret}${"y".repeat(25)}${secret.slice(0, 8)}`;
+  const out = redactCapped(captured, visible);
+  assert.ok(!out.includes(secret.slice(0, 8)), "the partial echo beyond the visible window must not surface");
+  assert.ok(out.includes(PASSWORD_REDACTED), "the fully captured echo collapses to the display marker");
+  assert.ok(out.length <= visible);
+
+  // Echoes that fit inside the visible window are replaced, not preserved.
+  const out2 = redactCapped(`head ${secret} tail`, 80);
+  assert.ok(!out2.includes(secret) && out2.includes(PASSWORD_REDACTED));
+
+  // The collapsed marker is held to the same postcondition: the pathological
+  // marker-spanning secret must not reappear after collapse either.
+  const { redactCapped: capped } = makeRedactor("ED]next");
+  const out3 = capped(`${"ED]next"}next steps`, 60);
+  assert.ok(!out3.includes("ED]next"));
+});
+
 test("buildActionSpace offers fill_password only when a password source is active", () => {
   const raw = [
     el({ attr: "j1", tag: "input", role: "textbox", text: "Username", href: "", clickable: false, typeable: true, typeAttr: "text" }),
