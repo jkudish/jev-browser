@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Fixed: the Chromium download now runs on install. The `postinstall` script was declared outside the `scripts` object, so npm ignored it; installs succeeded but the first run on a clean machine failed with `Executable doesn't exist`. Found and verified in clean containers by MrJev in [#6](https://github.com/jkudish/jev-browser/pull/6); `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` still skips the download.
+
 ## 0.4.0
 
 - Recording support: `--record <path.webm|dir>` on the CLI and `recordDir` on `navigate()` capture a video of the page; results include `video_path` and per-step `t_ms` timestamps.
