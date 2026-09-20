@@ -337,11 +337,12 @@ export function makeRedactor(secret: string): Redactor {
   // A single character that appears in no variant: insertions of it can
   // never take part in a variant occurrence, so no occurrence can include
   // or span one. Selection is provably total under the enforced
-  // MAX_SECRET_BYTES bound: the escape forms (percent, entity, markdown,
-  // aria) only ever add ASCII characters, so at most ~1,365 non-ASCII
-  // characters (4096 UTF-8 bytes, 3 bytes each) can appear in any variant
-  // — they cannot cover the 6,400-character private-use scan, let alone
-  // the five short candidates.
+  // MAX_SECRET_BYTES bound: every candidate character (U+2588 and all of
+  // U+E000 through U+F8FF) encodes as exactly three UTF-8 bytes, and the
+  // escape transforms synthesize only ASCII, so a candidate can only reach
+  // a variant from the secret itself. A 4,096-byte secret therefore covers
+  // at most floor(4096/3) = 1,365 candidates — far short of the 6,400-
+  // character private-use scan plus the five short candidates.
   const pickAbsent = (): string => {
     for (const c of ["\u2588", "\uE000", "\uE001", "\uE002", "\uE003"]) {
       if (!variantChars.has(c)) return c;
@@ -354,6 +355,33 @@ export function makeRedactor(secret: string): Redactor {
   };
   const blocker = pickAbsent();
   const survivors = (s: string): boolean => ordered.some((v) => s.includes(v));
+  // KMP failure functions, computed once per variant when the redactor is
+  // built; matching itself allocates nothing.
+  const failures = ordered.map((v) => {
+    const f = new Int32Array(v.length);
+    let k = 0;
+    for (let i = 1; i < v.length; i++) {
+      while (k > 0 && v[i] !== v[k]) k = f[k - 1];
+      if (v[i] === v[k]) k++;
+      f[i] = k;
+    }
+    return f;
+  });
+  // Scans s for every overlapping occurrence of v in O(len(v) + len(s)).
+  // The sink receives (start, end); callers supply a counting sink first and
+  // a recording sink only when something matched, so echo-free strings
+  // allocate nothing.
+  const scan = (v: string, f: Int32Array, s: string, sink: (start: number, end: number) => void): void => {
+    let k = 0;
+    for (let i = 0; i < s.length; i++) {
+      while (k > 0 && s[i] !== v[k]) k = f[k - 1];
+      if (s[i] === v[k]) k++;
+      if (k === v.length) {
+        sink(i - k + 1, i + 1);
+        k = f[k - 1];
+      }
+    }
+  };
   const redact = (s: string): string => {
     let out = s;
     for (const v of ordered) out = out.split(v).join(PASSWORD_REDACTED);
@@ -368,30 +396,34 @@ export function makeRedactor(secret: string): Redactor {
   // echo to a short marker, which would pull text that sat beyond the display
   // limit — including an echo the capture boundary cut mid-secret, which no
   // variant matches — into the displayed slice. Instead, every occurrence of
-  // every variant is marked in a sidecar mask (overlapping occurrences
-  // included, so no occurrence escapes marking), and the display string is
-  // rendered from the first `visible` characters with marked spans replaced
-  // by the marker: positions stay stable, and a span the slice cuts still
-  // renders as a marker, so no fragment of an echo can survive the boundary.
-  // No sentinel character is substituted, so there is no per-input candidate
-  // search, no native-collision handling, and no exhaustible character
-  // domain. When the marker render exceeds the cap (a span shorter than the
-  // 10-char marker) or fails the postcondition (adjacent markers, or marker
-  // and page text, reassembling a variant), marked spans are dropped
-  // entirely: unmasked text is occurrence-free by construction, so that
-  // render keeps the length promise. The join of two unmasked fragments
-  // across a dropped span can still theoretically form a variant; that final
-  // case renders the single blocker character, which no variant contains.
+  // every variant is marked (overlapping occurrences included, so no
+  // occurrence escapes marking) and the display string is rendered from the
+  // first `visible` characters with marked spans replaced by the marker:
+  // positions stay stable, and a span the slice cuts still renders as a
+  // marker, so no fragment of an echo can survive the boundary. When the
+  // marker render exceeds the cap (a span shorter than the 10-char marker)
+  // or fails the postcondition (adjacent markers, or marker and page text,
+  // reassembling a variant), marked spans are dropped entirely: unmasked
+  // text is occurrence-free by construction, so that render keeps the length
+  // promise. The join of two unmasked fragments across a dropped span can
+  // still theoretically form a variant; that final case renders the single
+  // blocker character, which no variant contains.
   const redactCapped = (s: string, visible: number): string => {
+    let count = 0;
+    for (let vi = 0; vi < ordered.length; vi++) scan(ordered[vi], failures[vi], s, () => { count++; });
+    if (count === 0) return s.slice(0, visible);
+    // Difference-array coverage: each occurrence adds +1 at its start and -1
+    // at its end; one prefix pass turns that into the coverage mask. Every
+    // overlapping occurrence is recorded in O(1), so a hostile
+    // self-repeating echo costs linear work, never a fill per match.
+    const diff = new Int32Array(s.length + 1);
+    for (let vi = 0; vi < ordered.length; vi++) scan(ordered[vi], failures[vi], s, (a, b) => { diff[a]++; diff[b]--; });
     const mask = new Uint8Array(s.length);
-    let marked = false;
-    for (const v of ordered) {
-      for (let i = s.indexOf(v); i !== -1; i = s.indexOf(v, i + 1)) {
-        mask.fill(1, i, i + v.length);
-        marked = true;
-      }
+    let run = 0;
+    for (let i = 0; i < s.length; i++) {
+      run += diff[i];
+      mask[i] = run > 0 ? 1 : 0;
     }
-    if (!marked) return s.slice(0, visible);
     const limit = Math.min(visible, s.length);
     let out = "";
     let i = 0;

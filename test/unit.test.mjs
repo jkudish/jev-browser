@@ -320,6 +320,12 @@ test("redactCapped placeholder hygiene: native collisions, exhaustion, cap", () 
   const out = short4.redactCapped("x abcd", 6);
   assert.ok(!out.includes("abcd"));
   assert.ok(out.length <= 6);
+
+  // Overlapping occurrences of a self-repeating secret must all be covered:
+  // "aaaa" in "baaaaa" has occurrences at both offsets, and non-overlapping
+  // marking would leave the trailing "a" of the second occurrence displayed.
+  const ov = makeRedactor("aaaa");
+  assert.equal(ov.redactCapped("baaaaa z", 20), "b[REDACTED] z");
 });
 
 test("buildActionSpace offers fill_password only when a password source is active", () => {
