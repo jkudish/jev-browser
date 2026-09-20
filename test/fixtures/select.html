@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Flights</title>
+  </head>
+  <body>
+    <!-- Exercises native <select> handling: the first option has an empty
+         label (it is filtered from the model-facing list, so the model's
+         o1/o2 do not line up with DOM indexes) and the chosen value is
+         echoed so the test can prove the right DOM option was selected. -->
+    <h2>Book a flight</h2>
+    <p>Pick the cabin class.</p>
+    <form onsubmit="return false">
+      <div>
+        <label for="cabin">Cabin</label>
+        <select id="cabin" name="cabin" onchange="document.getElementById('mark').textContent = 'SELECTED: ' + this.value">
+          <option value=""></option>
+          <option value="economy">Economy</option>
+          <option value="business">Business</option>
+          <option value="first">First</option>
+        </select>
+      </div>
+      <button type="submit">Search</button>
+    </form>
+    <p id="mark"></p>
+  </body>
+</html>
