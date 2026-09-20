@@ -248,8 +248,8 @@ async function extractAndStamp(
         // associated native labels (label[for] and wrapping labels, all of
         // them, in tree order), then placeholder and title. Inputs are void
         // elements: innerText is always empty, so plain <label for> forms
-        // resolve here or not at all. Candidates are normalized so a blank
-        // aria-labelledby cannot suppress the rest of the chain.
+        // resolve here or not at all. Every candidate is normalized before the
+        // fallback chain so a blank attribute cannot suppress the rest of it.
         const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
         const labelledby = norm(
           (el.getAttribute("aria-labelledby") ?? "")
@@ -262,14 +262,38 @@ async function extractAndStamp(
             .map((l) => l.textContent ?? "")
             .join(" "),
         );
+        // Search-like fields, by structure alone: input[type=search] or
+        // role=searchbox. No form-membership or label-text heuristics here:
+        // a plain text field that only looks like a search box is a real form
+        // field and must keep type + submit, not a one-action search.
+        const searchField = (tag === "input" && typeAttr === "search") || roleAttr === "searchbox";
+        // Submit controls: an explicit submission affordance. A <button> with
+        // no type attribute defaults to submit inside a form.
+        const submitControl =
+          (tag === "button" && (typeAttr === "submit" || (!el.hasAttribute("type") && el.closest("form") !== null))) ||
+          (tag === "input" && typeAttr === "submit");
+        // Submit button inputs carry their visible label in the value attribute
+        // (HTML-AAM: after ARIA and native labels, before title); with no value
+        // the browser supplies a default label, "Submit". Without this the
+        // control extracts as unlabeled noise and drops out of the action space.
+        // The UA-default label applies only when value is unspecified; an
+        // explicit empty value stays empty and falls through to title.
+        const valueAttr = el.getAttribute("value");
+        const valueLabel =
+          tag === "input" && typeAttr === "submit"
+            ? valueAttr ?? "Submit"
+            : tag === "input" && typeAttr === "button"
+              ? valueAttr ?? ""
+              : "";
         const label = norm(
           labelledby ||
-            el.getAttribute("aria-label") ||
+            norm(el.getAttribute("aria-label")) ||
             nativeLabels ||
-            el.getAttribute("placeholder") ||
-            el.getAttribute("title") ||
-            el.innerText ||
-            el.textContent ||
+            norm(valueLabel) ||
+            norm(el.getAttribute("placeholder")) ||
+            norm(el.getAttribute("title")) ||
+            norm(el.innerText) ||
+            norm(el.textContent) ||
             "",
         );
         const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap.href) : "";
@@ -277,6 +301,7 @@ async function extractAndStamp(
           ["a", "button"].includes(tag) ||
           ["button", "link"].includes(roleAttr) ||
           ["submit", "button", "checkbox", "radio"].includes(typeAttr);
+
         const selectable = tag === "select";
         // Password inputs are excluded from typeable by design, even when a
         // role attribute would otherwise make them typeable; they are stamped
@@ -290,6 +315,9 @@ async function extractAndStamp(
           (tag === "textarea" ||
             (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
             ["searchbox", "textbox"].includes(roleAttr));
+        // Enter submits from single-line fields (implicit form submission, or
+        // the site's own Enter handler); a textarea Enter is just a newline.
+        const enterSubmittable = typeable && tag !== "textarea";
         if (!clickable && !typeable && !selectable && !(passwordInput && includePw)) continue;
         const attr = `j${out.length + 1}`;
         el.setAttribute("data-jev-id", attr);
@@ -303,7 +331,7 @@ async function extractAndStamp(
                 .filter((o) => o.label.length > 0)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, selectable, passwordInput: passwordInput || undefined, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, searchField, submitControl, enterSubmittable, selectable, passwordInput: passwordInput || undefined, options });
       }
       return out;
     },
@@ -587,6 +615,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           chosen === `click_${e.id}` ||
           chosen === `type_${e.id}` ||
           chosen === `select_${e.id}` ||
+          chosen === `submit_${e.id}` ||
+          chosen === `search_${e.id}` ||
           chosen === `fill_password_${e.id}`,
       );
 
@@ -610,10 +640,29 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             actionError = "typing disabled by caller";
           } else {
             const generated = await generateTextToType(budget, safeTask, element.description, R(page.url()));
+            // Fill only: submitting is a separate submit_eN decision, so an
+            // ordinary form is never submitted mid-task by a field fill.
             await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
-            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
             typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+          }
+        } else if (chosen.startsWith("search_")) {
+          if (!allowTyping) {
+            actionError = "typing disabled by caller";
+          } else {
+            const generated = await generateTextToType(budget, safeTask, element.description, R(page.url()));
+            await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
+            detail = `searched "${generated.text}" via ${generated.via}`;
+            typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+          }
+        } else if (chosen.startsWith("submit_")) {
+          if (element.submitVia === "click") {
+            await page.click(selectorFor(element), { timeout: bounded(4_000) });
+            detail = `submitted form: ${element.description}`;
+          } else {
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
+            detail = `submitted form: Enter on ${element.description}`;
           }
         } else if (chosen.startsWith("select_")) {
           const opts = element.options ?? [];

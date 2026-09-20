@@ -2,6 +2,7 @@
 // Skipped unless TYPESAFE_API_KEY is set. Requires Playwright Chromium.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -9,6 +10,78 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 const serverPath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const hasKey = Boolean(process.env.TYPESAFE_API_KEY);
+
+// Minimal deterministic site: a multi-field form with a submit button (the
+// button carries no type attribute, so it defaults to submit inside the form),
+// and a search box with no submit button at all. The search box is a plain
+// text input on purpose: only input[type=search]/role=searchbox get the
+// one-action search_eN, so this one must stay reachable the explicit way,
+// type then submit_eN pressing Enter.
+async function startFixtureSite() {
+  const requests = [];
+  const page = (title, body) =>
+    `<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1>${body}</body></html>`;
+  const server = http.createServer((req, res) => {
+    requests.push(`${req.method} ${req.url}`);
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    if (url.pathname === "/join") {
+      res.end(
+        page(
+          "Join the club",
+          `<form action="/joined" method="get">
+             <input name="first" type="text" aria-label="First name" placeholder="First name">
+             <input name="city" type="text" aria-label="City" placeholder="City">
+             <button>Join</button>
+           </form>`,
+        ),
+      );
+    } else if (url.pathname === "/joined") {
+      res.end(page("Application received", `<p>first=${url.searchParams.get("first") ?? ""} city=${url.searchParams.get("city") ?? ""}</p>`));
+    } else if (url.pathname === "/find") {
+      res.end(
+        page(
+          "Find a drink",
+          `<form action="/found" method="get">
+             <input name="q" type="text" aria-label="Search" placeholder="Search for a drink">
+           </form>`,
+        ),
+      );
+    } else if (url.pathname === "/pay") {
+      res.end(
+        page(
+          "Pay your tab",
+          `<form action="/paid" method="get">
+             <input name="email" type="text" aria-label="Email" placeholder="Email">
+             <input type="submit" value="Pay now" aria-label="   " title="Confirm payment">
+           </form>`,
+        ),
+      );
+    } else if (url.pathname === "/paid") {
+      res.end(page("Payment sent", `<p>email=${url.searchParams.get("email") ?? ""}</p>`));
+    } else if (url.pathname === "/rsvp") {
+      res.end(
+        page(
+          "RSVP",
+          `<form action="/rsvped" method="get">
+             <input name="guest" type="text" aria-label="Guest name" placeholder="Guest name">
+             <input type="submit" title="Confirm attendance">
+           </form>`,
+        ),
+      );
+    } else if (url.pathname === "/rsvped") {
+      res.end(page("See you there", `<p>guest=${url.searchParams.get("guest") ?? ""}</p>`));
+    } else if (url.pathname === "/found") {
+      res.end(page("Results", `<p>Ristretto: a short shot of espresso (${url.searchParams.get("q") ?? ""})</p>`));
+    } else {
+      res.statusCode = 404;
+      res.end(page("Not found", ""));
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  return { requests, baseUrl: `http://127.0.0.1:${address.port}`, close: () => server.close() };
+}
 
 async function withClient(fn, extraEnv = {}) {
   const client = new Client({ name: "jev-browser-e2e", version: "0.1.0" });
@@ -111,11 +184,15 @@ test("clean termination on a hard page (informational)", { skip: !hasKey }, asyn
     );
     // DOM-first extraction should see DuckDuckGo's search input even though its
     // accessibility tree does not expose one. DuckDuckGo intermittently serves
-    // a bot-challenge page (50x-tq.html); when it does, clean termination is
-    // the most this test can demand.
-    const typedOk = body.steps.some((s) => /typed "/.test(s.detail ?? "") && !s.action_error);
-    const challenged = /50x|anomaly|challenge/i.test(body.final_url ?? "") || /50x/.test(body.final_title ?? "");
-    assert.ok(typedOk || challenged, "expected successful typing or a DuckDuckGo challenge page");
+    // a bot-challenge page (50x-tq.html) or its marketing homepage, where the
+    // search box sits below a wall of promo links and the model may never reach
+    // it; when either variant lands, clean termination is the most this test
+    // can demand.
+    const typedOk = body.steps.some((s) => /(typed|searched) "/.test(s.detail ?? "") && !s.action_error);
+    const degraded =
+      /50x|anomaly|challenge/i.test(body.final_url ?? "") ||
+      /50x|Protection\. Privacy/i.test(body.final_title ?? "");
+    assert.ok(typedOk || degraded, "expected successful typing or a degraded DuckDuckGo page");
   });
 });
 
@@ -503,5 +580,193 @@ test("password fill: misconfigured handoff files fail loudly, before any browser
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("multi-field form: typing fields does not submit the form", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Enter Ada as the First name and Oslo as the City on the club signup form, then stop. Do not submit the form.",
+            start_url: `${site.baseUrl}/join`,
+            max_steps: 6,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      const typed = body.steps.filter((s) => s.executed_action?.startsWith("type_") && !s.action_error);
+      assert.ok(typed.length >= 1, `expected typed steps: ${JSON.stringify(body.steps)}`);
+      for (const step of typed) {
+        assert.ok(
+          !/^navigated/.test(step.outcome ?? ""),
+          `typing a field submitted the form at step ${step.step} (${step.outcome})`,
+        );
+      }
+      assert.ok(
+        !site.requests.some((r) => r.includes("/joined")),
+        `the form was submitted anyway; requests: ${site.requests.join(", ")}`,
+      );
+    });
+  } finally {
+    site.close();
+  }
+});
+
+test("search flow: type then submit reaches the results page", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: 'Search this site for "ristretto" and stop on the results page',
+            start_url: `${site.baseUrl}/find`,
+            max_steps: 5,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      assert.ok(
+        ["done", "goal_achieved"].includes(body.status),
+        `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+      );
+      assert.match(body.final_url, /\/found\?/);
+      assert.ok(site.requests.some((r) => r.startsWith("GET /found")), `results never requested: ${site.requests.join(", ")}`);
+      // The fixture has no submit button, so reaching /found requires the
+      // explicit two-step flow: type (fill only, stays on the page) then
+      // submit_eN, which presses Enter on the field.
+      const typeStep = body.steps.find((s) => s.executed_action?.startsWith("type_"));
+      const submitStep = body.steps.find((s) => s.executed_action?.startsWith("submit_"));
+      assert.ok(typeStep, `no typed step: ${JSON.stringify(body.steps)}`);
+      assert.ok(submitStep, `no explicit submit step: ${JSON.stringify(body.steps)}`);
+      assert.ok(typeStep.step < submitStep.step, "submit must follow the typed step");
+      assert.ok(!/^navigated/.test(typeStep.outcome ?? ""), "typing alone must not submit the search");
+      assert.match(submitStep.detail ?? "", /Enter/, `unexpected submit detail: ${submitStep.detail}`);
+    });
+  } finally {
+    site.close();
+  }
+});
+
+test("form submission: the submit button is a submit_eN action", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Submit the club signup form and stop on the confirmation page",
+            start_url: `${site.baseUrl}/join`,
+            max_steps: 5,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      assert.ok(
+        ["done", "goal_achieved"].includes(body.status),
+        `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+      );
+      assert.match(body.final_url, /\/joined/);
+      // The button (no type attribute, inside the form) must be offered and
+      // executed as submit_eN, not click_eN.
+      const submitStep = body.steps.find((s) => s.executed_action?.startsWith("submit_"));
+      assert.ok(submitStep, `no submit step: ${JSON.stringify(body.steps)}`);
+      assert.match(submitStep.detail ?? "", /button "Join"/, `unexpected submit detail: ${submitStep.detail}`);
+      assert.ok(
+        !body.steps.some((s) => s.executed_action?.startsWith("click_")),
+        "the submit control must not be stamped click_",
+      );
+    });
+  } finally {
+    site.close();
+  }
+});
+
+// Regression: input[type=submit] carries its label in the value attribute, so
+// it must appear in the action space labeled "Pay now" (not as unlabeled noise)
+// and execute as submit_eN, never click_eN.
+test("input submit control: the value attribute labels it", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Submit the payment form and stop on the confirmation page",
+            start_url: `${site.baseUrl}/pay`,
+            max_steps: 5,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      assert.ok(
+        ["done", "goal_achieved"].includes(body.status),
+        `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+      );
+      assert.match(body.final_url, /\/paid/);
+      const submitStep = body.steps.find((s) => s.executed_action?.startsWith("submit_"));
+      assert.ok(submitStep, `no submit step: ${JSON.stringify(body.steps)}`);
+      assert.match(submitStep.detail ?? "", /"Pay now"/, `unexpected submit detail: ${submitStep.detail}`);
+      assert.ok(
+        !body.steps.some((s) => s.executed_action?.startsWith("click_")),
+        "the submit control must not be stamped click_",
+      );
+    });
+  } finally {
+    site.close();
+  }
+});
+
+// Regression: input[type=submit] with no value attribute would extract as an
+// empty label and drop out of the action space entirely, making the form
+// unsubmittable. The browser-default label "Submit" must keep it stamped.
+test("input submit without a value keeps the default Submit label", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Submit the RSVP form and stop on the confirmation page",
+            start_url: `${site.baseUrl}/rsvp`,
+            max_steps: 5,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      assert.ok(
+        ["done", "goal_achieved"].includes(body.status),
+        `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+      );
+      assert.match(body.final_url, /\/rsvped/);
+      const submitStep = body.steps.find((s) => s.executed_action?.startsWith("submit_"));
+      assert.ok(submitStep, `no submit step: ${JSON.stringify(body.steps)}`);
+      assert.match(submitStep.detail ?? "", /"Submit"/, `unexpected submit detail: ${submitStep.detail}`);
+    });
+  } finally {
+    site.close();
   }
 });
