@@ -9,14 +9,6 @@ import { z } from "zod";
 import { createRequire } from "node:module";
 import { navigate } from "./navigate.js";
 import { runCli } from "./cli.js";
-import {
-  assertNoPlaywrightDebug,
-  handoffDir,
-  parseTrustedOrigin,
-  readHandoffSecret,
-  readSecretFromEnv,
-  validateSecretBuffer,
-} from "./password.js";
 
 if (process.argv[2] === "run") {
   process.exit(await runCli(process.argv.slice(3)));
@@ -38,11 +30,7 @@ server.registerTool(
       "Give a task and a start URL; a Jev-driven agent navigates a real headless browser until the goal is met, " +
       "the stuck gate fires, or a budget (steps/seconds) is exhausted. Returns the final page in a chosen format " +
       "(text, markdown, html, or an aria snapshot), the full step trace with confidences, console/page/network " +
-      "errors captured along the way, token usage with estimated cost, and a final screenshot. " +
-      "The result also reports typing degradation explicitly (degraded, warnings with codes, typing_provider, typing_model), so a failed typing generator is visible instead of silently typing keyword soup. " +
-      "For logins: with JEV_BROWSER_PASSWORD_ORIGIN set in this server's environment, password_file or password_env " +
-      "fills native password fields on that origin only, without the value ever entering model context, traces, or " +
-      "screenshots; never put the password value itself in any argument or in the task.",
+      "errors captured along the way, token usage with estimated cost, and a final screenshot.",
     inputSchema: {
       task: z.string().min(1).describe("What the agent should accomplish, in natural language."),
       start_url: z
@@ -55,7 +43,7 @@ server.registerTool(
       allow_typing: z
         .boolean()
         .optional()
-        .describe("Whether the agent may type into fields. Uses the configured small model; when it fails, ordinary fields are left empty with a warning and search boxes fall back to a keyword heuristic. Default true."),
+        .describe("Whether the agent may type into fields (uses the configured small model, or a keyword fallback). Default true."),
       format: z
         .enum(["text", "markdown", "html", "aria"])
         .optional()
@@ -64,60 +52,24 @@ server.registerTool(
             "html (1MB, for app-side parsing), aria (16k, Playwright aria snapshot YAML).",
         ),
       max_chars: z.number().int().min(100).optional().describe("Override the format's default character cap."),
-      screenshot: z.enum(["final", "none"]).optional().describe("Final viewport JPEG. Default 'final'. Suppressed automatically after a password fill."),
-      password_file: z
-        .string()
-        .min(1)
-        .max(4096)
+      screenshot: z.enum(["final", "none"]).optional().describe("Final viewport JPEG. Default 'final'."),
+      cookies: z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            value: z.string(),
+            domain: z.string().optional().describe("Defaults to the start URL's host."),
+            path: z.string().optional().describe("Defaults to '/'."),
+          }),
+        )
         .optional()
         .describe(
-          "Password fill: absolute path inside the handoff directory (default ~/.jev-browser/handoff; override with " +
-            "JEV_BROWSER_HANDOFF_DIR) holding the password, written by your secret manager (e.g. " +
-            "op read --no-newline --out-file ...). The file is consumed and deleted at run start. " +
-            "Requires JEV_BROWSER_PASSWORD_ORIGIN in this server's environment. Never put the password value itself here.",
-        ),
-      password_env: z
-        .string()
-        .min(1)
-        .max(256)
-        .optional()
-        .describe(
-          "Password fill: name of a JEV_PASSWORD_* environment variable visible to this server. Naming a variable " +
-            "with that prefix is the operator's opt-in; any other name is rejected. Requires " +
-            "JEV_BROWSER_PASSWORD_ORIGIN in this server's environment.",
+          "Cookies added before the first navigation, e.g. a session cookie so the run starts behind a login. " +
+            "The agent never types into password fields, so this is the only way onto an authenticated page.",
         ),
     },
   },
   async ({ task, start_url, ...rest }, extra) => {
-    // Credential delivery resolves before the browser launches. Every failure
-    // here is a configuration error and is reported without ever quoting file
-    // contents or variable values.
-    let password: { value: string; origin: string } | undefined;
-    if (rest.password_file || rest.password_env) {
-      try {
-        if (rest.password_file && rest.password_env) {
-          throw new Error("pass at most one of password_file and password_env");
-        }
-        const rawOrigin = process.env.JEV_BROWSER_PASSWORD_ORIGIN;
-        if (!rawOrigin) {
-          throw new Error(
-            "password fill requested but JEV_BROWSER_PASSWORD_ORIGIN is not set; add it to this server's " +
-              "environment as an exact origin (e.g. https://acme.com)",
-          );
-        }
-        const origin = parseTrustedOrigin(rawOrigin);
-        if (!origin) {
-          throw new Error("JEV_BROWSER_PASSWORD_ORIGIN must be an exact origin like https://acme.com (http is allowed only on localhost)");
-        }
-        assertNoPlaywrightDebug();
-        const secret = rest.password_file
-          ? validateSecretBuffer(await readHandoffSecret(rest.password_file, handoffDir()), "password file")
-          : validateSecretBuffer(readSecretFromEnv(rest.password_env!), "password env");
-        password = { value: secret, origin };
-      } catch (error) {
-        return { content: [{ type: "text", text: (error as Error).message }], isError: true };
-      }
-    }
     const result = await navigate(
       {
         task,
@@ -128,7 +80,7 @@ server.registerTool(
         format: rest.format,
         maxChars: rest.max_chars,
         screenshot: rest.screenshot,
-        password,
+        cookies: rest.cookies,
       },
       extra.signal,
     );
