@@ -334,7 +334,23 @@ export function makeRedactor(secret: string): Redactor {
   // Normal secrets keep the readable "[REDACTED]" marker.
   const variantChars = new Set<string>();
   for (const v of ordered) for (const ch of v) variantChars.add(ch);
-  const blocker = ["\u2588", "\uE000", "\uE001", "\uE002", "\uE003"].find((c) => !variantChars.has(c))!;
+  // A single character that appears in no variant: insertions of it can
+  // never take part in a variant occurrence, so no occurrence can include
+  // or span one. The short candidate list covers every real secret; the
+  // private-use scan makes selection total even for a hostile value that
+  // happens to contain all of the candidates. The extra `also` string lets
+  // callers additionally avoid characters present in a specific input.
+  const pickAbsent = (also: string): string => {
+    for (const c of ["\u2588", "\uE000", "\uE001", "\uE002", "\uE003"]) {
+      if (!variantChars.has(c) && !also.includes(c)) return c;
+    }
+    for (let cp = 0xe000; cp <= 0xf8ff; cp++) {
+      const c = String.fromCharCode(cp);
+      if (!variantChars.has(c) && !also.includes(c)) return c;
+    }
+    throw new Error("unreachable: no character is absent from a finite set");
+  };
+  const blocker = pickAbsent("");
   const escapeRe = (ch: string) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const survivors = (s: string): boolean => ordered.some((v) => s.includes(v));
   const redact = (s: string): string => {
@@ -354,15 +370,21 @@ export function makeRedactor(secret: string): Redactor {
   // same-length placeholder keeps every position stable across the slice;
   // placeholder runs are collapsed to the display marker only afterwards. A
   // run truncated by the slice still collapses, so no fragment of an echo can
-  // survive the boundary, and the collapsed output is held to the same
-  // postcondition as redact.
-  const phRun = new RegExp(`${escapeRe(blocker)}+`, "g");
+  // survive the boundary. The placeholder is picked per call and must also be
+  // absent from this input, or a placeholder character occurring natively in
+  // page text would collapse to the display marker and misreport page content
+  // as redacted. Collapsing a short run to the 10-char marker can exceed the
+  // visible cap, and the collapsed marker is itself held to the postcondition:
+  // in either case the runs collapse to the single placeholder character
+  // instead, which is never longer than the run it replaces.
   const redactCapped = (s: string, visible: number): string => {
+    const ph = pickAbsent(s);
     let out = s;
-    for (const v of ordered) out = out.split(v).join(blocker.repeat(v.length));
+    for (const v of ordered) out = out.split(v).join(ph.repeat(v.length));
     const sliced = out.slice(0, visible);
+    const phRun = new RegExp(`${escapeRe(ph)}+`, "g");
     let display = sliced.replace(phRun, PASSWORD_REDACTED);
-    if (survivors(display)) display = sliced.replace(phRun, blocker);
+    if (survivors(display) || display.length > visible) display = sliced.replace(phRun, ph);
     return display;
   };
   const redactDeep = (value: unknown, depth = 0): any => {

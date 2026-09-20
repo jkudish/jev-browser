@@ -270,7 +270,12 @@ test("redactCapped keeps a partially captured echo out of the visible slice", ()
   const visible = 40;
   const captured = `${secret}${"y".repeat(25)}${secret.slice(0, 8)}`;
   const out = redactCapped(captured, visible);
-  assert.ok(!out.includes(secret.slice(0, 8)), "the partial echo beyond the visible window must not surface");
+  // The old redact-then-slice logic shrank the leading echo to a 10-char
+  // marker and exposed the first three characters of the partial echo here;
+  // assert on every prefix short enough to surface.
+  for (let n = 3; n <= secret.length; n++) {
+    assert.ok(!out.includes(secret.slice(0, n)), `partial-echo prefix of length ${n} must not surface`);
+  }
   assert.ok(out.includes(PASSWORD_REDACTED), "the fully captured echo collapses to the display marker");
   assert.ok(out.length <= visible);
 
@@ -283,6 +288,28 @@ test("redactCapped keeps a partially captured echo out of the visible slice", ()
   const { redactCapped: capped } = makeRedactor("ED]next");
   const out3 = capped(`${"ED]next"}next steps`, 60);
   assert.ok(!out3.includes("ED]next"));
+});
+
+test("redactCapped placeholder hygiene: native collisions, exhaustion, cap", () => {
+  // A placeholder character occurring natively in page text must not be
+  // collapsed to the display marker: it would misreport page content as
+  // redacted.
+  const native = makeRedactor("hunter2");
+  assert.equal(native.redactCapped("A\u2588B", 80), "A\u2588B");
+
+  // A secret containing every short-form candidate character still redacts:
+  // the placeholder is synthesized from the private-use range.
+  const hostile = "\u2588\uE000\uE001\uE002\uE003!";
+  const hr = makeRedactor(hostile);
+  const hOut = hr.redact(`echo ${hostile} end`);
+  assert.ok(!hOut.includes(hostile) && hOut.includes(PASSWORD_REDACTED));
+
+  // Collapsing a short placeholder run to the 10-char marker can exceed the
+  // visible cap; the single-character collapse keeps the length promise.
+  const short4 = makeRedactor("abcd");
+  const out = short4.redactCapped("x abcd", 6);
+  assert.ok(!out.includes("abcd"));
+  assert.ok(out.length <= 6);
 });
 
 test("buildActionSpace offers fill_password only when a password source is active", () => {
