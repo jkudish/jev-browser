@@ -1,6 +1,7 @@
 // End-to-end: spawn the built server over stdio and run real navigation tasks.
 // Skipped unless TYPESAFE_API_KEY is set. Requires Playwright Chromium.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -153,6 +154,7 @@ test("label-for inputs appear in the action space and can be typed into", { skip
       const typed = body.steps.find((s) => /^type_/.test(s.executed_action ?? "") && !s.action_error);
       assert.ok(typed, `no type action executed: ${JSON.stringify(body.steps.map((s) => [s.proposed_action, s.executed_action]))}`);
       assert.match(typed.outcome ?? "", /typed into "Username"/);
+      assert.ok(!body.steps.some((s) => /Password/.test(s.outcome ?? "")), "a password input must not be offered without a source, even with a role override");
       assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}`);
     });
   } finally {
@@ -366,6 +368,7 @@ test("password fill: wrong-origin pages are refused and the value never lands", 
         const refused = body.steps.find((s) => /origin_mismatch/.test(s.action_error ?? ""));
         assert.ok(refused, `expected an origin_mismatch refusal: ${JSON.stringify(body.steps.map((s) => s.action_error))}`);
         assert.notEqual(body.password_filled, true);
+        assert.equal(body.screenshot_suppressed, "credential-fill"); // even a refused fill attempt suppresses it
         assert.ok(!body.page.content.includes("PW_FILLED"), "nothing may be filled on the wrong origin");
         assert.ok(!body.page.content.includes("SUBMITTED"));
         assertNoSecret(result, body);
@@ -417,6 +420,38 @@ test("password fill: JEV_PASSWORD_* env path works; other names are rejected", {
       },
       { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_PASSWORD_E2E: SECRET },
     );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("password fill: CLI stdin path works and never leaks the secret", { skip: !hasKey }, async () => {
+  const fixture = await serveFixture("password.html");
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        serverPath, "run",
+        "Fill the password field with the configured password, then stop",
+        `${fixture.origin}/`,
+        "--password-file", "-",
+        "--password-origin", fixture.origin,
+        "--no-screenshot",
+        "--max-steps", "5",
+        "--max-seconds", "60",
+      ],
+      { env: { ...process.env } },
+    );
+    child.stdin.write(SECRET);
+    child.stdin.end();
+    let stdout = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 0, stdout);
+    const body = JSON.parse(stdout);
+    assert.ok(body.steps.some((s) => /^fill_password_/.test(s.executed_action ?? "") && !s.action_error), "fill did not execute");
+    assert.ok(body.page.content.includes("PW_FILLED"));
+    assert.ok(!stdout.includes(SECRET) && !stdout.includes(encodeURIComponent(SECRET)), "the secret leaked into CLI output");
   } finally {
     await fixture.close();
   }

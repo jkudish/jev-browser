@@ -108,6 +108,8 @@ test("parseTrustedOrigin accepts exact origins, rejects everything looser", () =
   assert.equal(parseTrustedOrigin("http://localhost:8080"), "http://localhost:8080");
   assert.equal(parseTrustedOrigin("http://[::1]:9000"), "http://[::1]:9000");
   assert.equal(parseTrustedOrigin(null), null);
+  assert.equal(parseTrustedOrigin("https://*.example.com"), null); // wildcards are not exact
+  assert.equal(parseTrustedOrigin("https://%2A.example.com"), null); // percent-encoded wildcard
   assert.equal(parseTrustedOrigin("https://acme.com/login"), null); // path
   assert.equal(parseTrustedOrigin("https://acme.com?a=1"), null); // query
   assert.equal(parseTrustedOrigin("http://acme.com"), null); // http off loopback
@@ -330,11 +332,31 @@ test("readSecretFromEnv enforces the JEV_PASSWORD_ prefix before lookup", () => 
   delete process.env.JEV_PASSWORD_UNITTEST;
 });
 
+test("redactor survives secrets that collide with the redaction marker", () => {
+  for (const secret of ["[REDACTED]", "REDACTED", "DACT", "ED]he"]) {
+    const { redact } = makeRedactor(secret);
+    for (const echo of [`x${secret}y`, encodeURIComponent(secret), `a ${secret} b ${secret} c`]) {
+      const out = redact(echo);
+      assert.ok(!out.includes(secret), `secret ${JSON.stringify(secret)} survived redaction of ${JSON.stringify(echo)}`);
+      assert.equal(redact(out), out, "redaction must be stable on its own output");
+    }
+  }
+});
+
+test("redactor covers lowercase percent-encoding of form echoes", () => {
+  const secret = "ab cd?";
+  const { redact } = makeRedactor(secret);
+  const out = redact("ab+cd%3f"); // some servers and proxies lowercase the hex
+  assert.ok(!out.includes("cd%3f") && !out.includes(secret));
+});
+
 test("assertNoPlaywrightDebug refuses debug modes that log filled values", () => {
   const saved = { PWDEBUG: process.env.PWDEBUG, DEBUG: process.env.DEBUG, DEBUG_FILE: process.env.DEBUG_FILE };
   try {
     process.env.PWDEBUG = "1";
     assert.throws(() => assertNoPlaywrightDebug(), /PWDEBUG/);
+    process.env.PWDEBUG = "0";
+    assert.throws(() => assertNoPlaywrightDebug(), /PWDEBUG/); // unset, do not zero
     delete process.env.PWDEBUG;
 
     // Wildcards and mixed specs include Playwright's namespaces, so any

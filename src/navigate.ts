@@ -277,16 +277,19 @@ async function extractAndStamp(
           ["a", "button"].includes(tag) ||
           ["button", "link"].includes(roleAttr) ||
           ["submit", "button", "checkbox", "radio"].includes(typeAttr);
-        const typeable =
-          tag === "textarea" ||
-          (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
-          ["searchbox", "textbox"].includes(roleAttr);
         const selectable = tag === "select";
-        // Password inputs are excluded from typeable by design; they are
-        // stamped separately so credential runs can offer fill_password.
-        // Without a password source they are skipped entirely: they never
-        // crowd the candidate budget on ordinary runs.
+        // Password inputs are excluded from typeable by design, even when a
+        // role attribute would otherwise make them typeable; they are stamped
+        // separately so credential runs can offer fill_password. Without a
+        // password source they are skipped entirely, before stamping: they
+        // never consume the candidate budget on ordinary runs.
         const passwordInput = tag === "input" && typeAttr === "password";
+        if (passwordInput && !includePw) continue;
+        const typeable =
+          !passwordInput &&
+          (tag === "textarea" ||
+            (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
+            ["searchbox", "textbox"].includes(roleAttr));
         if (!clickable && !typeable && !selectable && !(passwordInput && includePw)) continue;
         const attr = `j${out.length + 1}`;
         el.setAttribute("data-jev-id", attr);

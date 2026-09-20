@@ -14,6 +14,8 @@ export const PASSWORD_ENV_PREFIX = "JEV_PASSWORD_";
 export const MAX_SECRET_BYTES = 4096;
 export const MIN_SECRET_CHARS = 4;
 export const PASSWORD_REDACTED = "[REDACTED]";
+/** Collision-safe fallback: shorter than MIN_SECRET_CHARS, so no accepted variant fits inside it. */
+export const PASSWORD_FALLBACK = "[X]";
 
 /**
  * Exact-origin check for the password trust anchor: scheme://host[:port]
@@ -30,6 +32,11 @@ export function parseTrustedOrigin(raw: string): string | null {
   if (url.pathname !== "/" && url.pathname !== "") return null;
   if (url.search || url.hash) return null;
   if (url.username || url.password) return null;
+  // A wildcard (literal or percent-encoded) is not an exact origin. The
+  // in-page equality check would refuse it anyway; rejecting it here keeps a
+  // misconfigured trust anchor from consuming the one-shot handoff file and
+  // launching a doomed run.
+  if (/[*%]/.test(url.hostname)) return null;
   const loopback =
     url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname.endsWith(".localhost");
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) return null;
@@ -220,11 +227,13 @@ export function readSecretFromEnv(name: string): Buffer {
  * through (pw:api, pw:channel, pw:protocol, and wildcard specs like `*` that
  * include them), and DEBUG_FILE which redirects those logs to disk. Wildcard
  * semantics make an exact deny-list unreliable, so credential runs refuse any
- * nonempty DEBUG and DEBUG_FILE outright.
+ * nonempty PWDEBUG, DEBUG, and DEBUG_FILE outright.
  */
 export function assertNoPlaywrightDebug(): void {
   const pwdebug = process.env.PWDEBUG;
-  if (pwdebug !== undefined && pwdebug !== "" && pwdebug !== "0") {
+  // "0" is refused too: unset it rather than zeroing it, so the rule stays
+  // "any nonempty value" with no version-dependent exceptions.
+  if (pwdebug !== undefined && pwdebug !== "") {
     throw new Error("PWDEBUG is set; unset it for password runs (Playwright debug output can include filled values)");
   }
   const debug = process.env.DEBUG ?? "";
@@ -275,6 +284,8 @@ export function makeRedactor(secret: string): Redactor {
   variants.add(pct);
   variants.add(pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
   variants.add(new URLSearchParams({ x: secret }).toString().slice(2));
+  // Servers and proxies sometimes lowercase the percent hex; match that form.
+  variants.add(new URLSearchParams({ x: secret }).toString().slice(2).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
   // HTML entity encodings: the full named-attribute form, the partial
   // serializations real DOM APIs produce (textContent escapes only & and <;
   // attribute serialization escapes & < > " '), and numeric references.
@@ -307,8 +318,14 @@ export function makeRedactor(secret: string): Redactor {
   const ordered = Array.from(variants)
     .filter((v) => v.length >= MIN_SECRET_CHARS)
     .sort((a, b) => b.length - a.length);
+  // The replacement must not itself contain the secret: a value like
+  // "REDACTED" (or a slice of it, e.g. "DACT") would survive inside
+  // "[REDACTED]". When any variant occurs in the standard marker, fall back
+  // to a marker shorter than MIN_SECRET_CHARS, which no accepted variant
+  // can fit inside.
+  const marker = ordered.some((v) => PASSWORD_REDACTED.includes(v)) ? PASSWORD_FALLBACK : PASSWORD_REDACTED;
   const redact = (s: string): string => {
-    for (const v of ordered) s = s.split(v).join(PASSWORD_REDACTED);
+    for (const v of ordered) s = s.split(v).join(marker);
     return s;
   };
   const redactDeep = (value: unknown, depth = 0): any => {
