@@ -336,22 +336,23 @@ export function makeRedactor(secret: string): Redactor {
   for (const v of ordered) for (const ch of v) variantChars.add(ch);
   // A single character that appears in no variant: insertions of it can
   // never take part in a variant occurrence, so no occurrence can include
-  // or span one. The short candidate list covers every real secret; the
-  // private-use scan makes selection total even for a hostile value that
-  // happens to contain all of the candidates. The extra `also` string lets
-  // callers additionally avoid characters present in a specific input.
-  const pickAbsent = (also: string): string => {
+  // or span one. Selection is provably total under the enforced
+  // MAX_SECRET_BYTES bound: the escape forms (percent, entity, markdown,
+  // aria) only ever add ASCII characters, so at most ~1,365 non-ASCII
+  // characters (4096 UTF-8 bytes, 3 bytes each) can appear in any variant
+  // — they cannot cover the 6,400-character private-use scan, let alone
+  // the five short candidates.
+  const pickAbsent = (): string => {
     for (const c of ["\u2588", "\uE000", "\uE001", "\uE002", "\uE003"]) {
-      if (!variantChars.has(c) && !also.includes(c)) return c;
+      if (!variantChars.has(c)) return c;
     }
     for (let cp = 0xe000; cp <= 0xf8ff; cp++) {
       const c = String.fromCharCode(cp);
-      if (!variantChars.has(c) && !also.includes(c)) return c;
+      if (!variantChars.has(c)) return c;
     }
     throw new Error("unreachable: no character is absent from a finite set");
   };
-  const blocker = pickAbsent("");
-  const escapeRe = (ch: string) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const blocker = pickAbsent();
   const survivors = (s: string): boolean => ordered.some((v) => s.includes(v));
   const redact = (s: string): string => {
     let out = s;
@@ -366,26 +367,48 @@ export function makeRedactor(secret: string): Redactor {
   // displayed (visible limit + maxVariantLength). Plain redact shrinks each
   // echo to a short marker, which would pull text that sat beyond the display
   // limit — including an echo the capture boundary cut mid-secret, which no
-  // variant matches — into the displayed slice. Replacing each variant with a
-  // same-length placeholder keeps every position stable across the slice;
-  // placeholder runs are collapsed to the display marker only afterwards. A
-  // run truncated by the slice still collapses, so no fragment of an echo can
-  // survive the boundary. The placeholder is picked per call and must also be
-  // absent from this input, or a placeholder character occurring natively in
-  // page text would collapse to the display marker and misreport page content
-  // as redacted. Collapsing a short run to the 10-char marker can exceed the
-  // visible cap, and the collapsed marker is itself held to the postcondition:
-  // in either case the runs collapse to the single placeholder character
-  // instead, which is never longer than the run it replaces.
+  // variant matches — into the displayed slice. Instead, every occurrence of
+  // every variant is marked in a sidecar mask (overlapping occurrences
+  // included, so no occurrence escapes marking), and the display string is
+  // rendered from the first `visible` characters with marked spans replaced
+  // by the marker: positions stay stable, and a span the slice cuts still
+  // renders as a marker, so no fragment of an echo can survive the boundary.
+  // No sentinel character is substituted, so there is no per-input candidate
+  // search, no native-collision handling, and no exhaustible character
+  // domain. When the marker render exceeds the cap (a span shorter than the
+  // 10-char marker) or fails the postcondition (adjacent markers, or marker
+  // and page text, reassembling a variant), marked spans are dropped
+  // entirely: unmasked text is occurrence-free by construction, so that
+  // render keeps the length promise. The join of two unmasked fragments
+  // across a dropped span can still theoretically form a variant; that final
+  // case renders the single blocker character, which no variant contains.
   const redactCapped = (s: string, visible: number): string => {
-    const ph = pickAbsent(s);
-    let out = s;
-    for (const v of ordered) out = out.split(v).join(ph.repeat(v.length));
-    const sliced = out.slice(0, visible);
-    const phRun = new RegExp(`${escapeRe(ph)}+`, "g");
-    let display = sliced.replace(phRun, PASSWORD_REDACTED);
-    if (survivors(display) || display.length > visible) display = sliced.replace(phRun, ph);
-    return display;
+    const mask = new Uint8Array(s.length);
+    let marked = false;
+    for (const v of ordered) {
+      for (let i = s.indexOf(v); i !== -1; i = s.indexOf(v, i + 1)) {
+        mask.fill(1, i, i + v.length);
+        marked = true;
+      }
+    }
+    if (!marked) return s.slice(0, visible);
+    const limit = Math.min(visible, s.length);
+    let out = "";
+    let i = 0;
+    while (i < limit) {
+      if (mask[i]) {
+        out += PASSWORD_REDACTED;
+        while (i < s.length && mask[i]) i++;
+      } else {
+        out += s[i++];
+      }
+    }
+    if (out.length > visible || survivors(out)) {
+      out = "";
+      for (let j = 0; j < limit; j++) if (!mask[j]) out += s[j];
+      if (survivors(out)) return blocker;
+    }
+    return out;
   };
   const redactDeep = (value: unknown, depth = 0): any => {
     if (depth > 12) return value;

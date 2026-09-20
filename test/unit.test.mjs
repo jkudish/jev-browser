@@ -304,8 +304,18 @@ test("redactCapped placeholder hygiene: native collisions, exhaustion, cap", () 
   const hOut = hr.redact(`echo ${hostile} end`);
   assert.ok(!hOut.includes(hostile) && hOut.includes(PASSWORD_REDACTED));
 
-  // Collapsing a short placeholder run to the 10-char marker can exceed the
-  // visible cap; the single-character collapse keeps the length promise.
+  // An input containing every candidate character (the full private-use
+  // range) must also redact: the span-mask path never searches for a
+  // character absent from the input, so nothing is exhaustible.
+  const greedy = makeRedactor("hunter2!");
+  let all = "\u2588";
+  for (let cp = 0xe000; cp <= 0xf8ff; cp++) all += String.fromCharCode(cp);
+  const gOut = greedy.redactCapped(`pre hunter2! ${all} hunter2! post`, 7000);
+  assert.ok(!gOut.includes("hunter2!"));
+  assert.ok(gOut.includes(PASSWORD_REDACTED));
+
+  // Replacing a 4-character span with the 10-char marker can exceed the
+  // visible cap; the drop render keeps the length promise.
   const short4 = makeRedactor("abcd");
   const out = short4.redactCapped("x abcd", 6);
   assert.ok(!out.includes("abcd"));
