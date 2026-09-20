@@ -132,3 +132,35 @@ export function heuristicQuery(task: string): string {
 
 /** jev-1.12 published pricing: input $0.042 per M tokens, output free. */
 export const PRICE_PER_MTOK_IN = 0.042;
+
+/** A cookie to seed the browser context with before the first navigation. */
+export interface SeedCookie {
+  name: string;
+  value: string;
+  domain?: string; // defaults to the start URL's host
+  path?: string; // defaults to "/"
+}
+
+/**
+ * Resolves seed cookies into Playwright's `addCookies` shape. Domain defaults
+ * to the start URL's host so the common case (a session cookie for the site
+ * being navigated) needs only a name and value.
+ */
+export function resolveCookies(
+  cookies: SeedCookie[] | undefined,
+  startUrl: string,
+): Array<{ name: string; value: string; domain: string; path: string }> {
+  if (!cookies?.length) return [];
+  const host = new URL(startUrl).hostname;
+  return cookies.map((c) => {
+    if (!c.name || typeof c.value !== "string") throw new Error(`cookie needs a name and a value: ${JSON.stringify(c)}`);
+    return { name: c.name, value: c.value, domain: c.domain ?? host, path: c.path ?? "/" };
+  });
+}
+
+/** Parses a CLI `name=value` cookie spec. The value may itself contain `=`. */
+export function parseCookieSpec(spec: string): SeedCookie {
+  const eq = spec.indexOf("=");
+  if (eq <= 0) throw new Error(`cookie expects name=value, got: ${JSON.stringify(spec)}`);
+  return { name: spec.slice(0, eq), value: spec.slice(eq + 1) };
+}

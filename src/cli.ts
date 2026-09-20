@@ -1,7 +1,9 @@
 // CLI: `jev-browser run "<task>" <start-url> [options]`
 // Everything else (no args) starts the MCP stdio server (src/index.ts).
 import { mkdir, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { parseCookieSpec } from "./lib.js";
 import { navigate, type NavigateOptions } from "./navigate.js";
 
 interface CliArgs extends NavigateOptions {
@@ -40,6 +42,19 @@ function parseArgs(argv: string[]): CliArgs {
       case "--record":
         args.recordPath = argv[++i];
         break;
+      case "--cookie":
+        // name=value; domain defaults to the start URL's host.
+        (args.cookies ??= []).push(parseCookieSpec(argv[++i] ?? ""));
+        break;
+      case "--cookie-file": {
+        // name=@path: the value is read from a file (trailing newline dropped),
+        // so a session token never has to appear on the command line.
+        const { name, value: ref } = parseCookieSpec(argv[++i] ?? "");
+        if (!ref.startsWith("@")) throw new Error(`--cookie-file expects name=@path, got: ${name}=${ref}`);
+        const value = readFileSync(ref.slice(1), "utf8").replace(/\r?\n$/, "");
+        (args.cookies ??= []).push({ name, value });
+        break;
+      }
       case "--help":
       case "-h":
         args.help = true;
@@ -62,6 +77,10 @@ Options:
   --no-typing                          Disable typing into fields
   --screenshot <path>                  Write the final JPEG to this path
   --no-screenshot                      Skip the screenshot entirely
+  --cookie <name=value>                Add a cookie before the first navigation
+                                       (domain defaults to the start URL's host)
+  --cookie-file <name=@path>           Same, with the value read from a file so a
+                                       session token stays off the command line
   --record <path>                      Record a video of the page; a .webm path
                                        saves to that file, any other value is a
                                        directory for Playwright's output
@@ -73,7 +92,13 @@ JEV_BROWSER_* vars configure models and the typing provider.
 Without "run", this binary starts the MCP stdio server.`;
 
 export async function runCli(argv: string[]): Promise<number> {
-  const args = parseArgs(argv);
+  let args: CliArgs;
+  try {
+    args = parseArgs(argv);
+  } catch (err) {
+    console.error(`error: ${(err as Error).message}`);
+    return 1;
+  }
   if (args.help || !args.task || !args.startUrl) {
     console.log(HELP);
     return args.help ? 0 : 1;

@@ -18,6 +18,8 @@ import {
   pickAlternate,
   PRICE_PER_MTOK_IN,
   RawElement,
+  resolveCookies,
+  SeedCookie,
   selectorFor,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
@@ -35,6 +37,10 @@ export interface NavigateOptions {
   maxChars?: number;
   screenshot?: "final" | "none";
   recordDir?: string;
+  /** Cookies added to the context before the first navigation, so a run can
+   *  start behind a login the agent cannot perform itself (password fields
+   *  are never typed into). Domain defaults to the start URL's host. */
+  cookies?: SeedCookie[];
 }
 
 export interface StepRecord {
@@ -391,6 +397,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       viewport: { width: 1024, height: 640 },
       ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
     });
+    const seedCookies = resolveCookies(options.cookies, startUrl);
+    if (seedCookies.length) await context.addCookies(seedCookies);
     // No Playwright default (30s) may ever outlive the run budget.
     context.setDefaultTimeout(8_000);
     let page = await context.newPage();

@@ -123,7 +123,14 @@ The same agent runs from the command line. Result JSON is printed to stdout.
 npx -y @jkudish/jev-browser run "Find the newest release and stop on it" https://github.com/jkudish/jev-browser/releases
 ```
 
-CLI options include `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, and `--record path.webm` (or a directory for Playwright's raw output). Run with `--help` for the full list.
+CLI options include `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, `--record path.webm` (or a directory for Playwright's raw output), and `--cookie name=value` / `--cookie-file name=@path` to start behind a login. Run with `--help` for the full list.
+
+The agent never types into password fields, so the way onto an authenticated page is to hand it a session cookie captured elsewhere (a browser, a login script). The domain defaults to the start URL's host; `--cookie-file` reads the value from a file so the token stays out of shell history.
+
+```bash
+npx -y @jkudish/jev-browser run "Open the newest order and stop on it" https://app.example.com/orders \
+  --cookie-file "session=@$HOME/.cache/example-session"
+```
 
 Or import it as a library. The package entry exports `navigate` side-effect free: importing it starts no server and no browser until you call it.
 
@@ -135,6 +142,7 @@ const result = await navigate({
   startUrl: "https://example.com/pricing",
   format: "markdown",
   maxSteps: 16,
+  cookies: [{ name: "session", value: process.env.EXAMPLE_SESSION }], // optional; domain defaults to the start URL's host
 });
 
 if ("error" in result) throw new Error(result.error);
@@ -169,7 +177,7 @@ Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus on
 }
 ```
 
-Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing` (default true), `format` (`text`, `markdown`, `html`, `aria`), `max_chars` (override the cap), `screenshot` (`final`, default, or `none`).
+Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing` (default true), `format` (`text`, `markdown`, `html`, `aria`), `max_chars` (override the cap), `screenshot` (`final`, default, or `none`), `cookies` (list of `{ name, value, domain?, path? }` added before the first navigation; domain defaults to the start URL's host).
 
 ## What you get back
 
@@ -226,7 +234,7 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 
 - Up to 240 elements per step; Jev's Choice supports 255 options. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages.
 - The markdown format converts the whole body, so it carries navigation chrome and can include inline script text; a readability pass is a candidate improvement, not a committed one.
-- Password and file inputs are never offered. Hover-revealed menus, keyboard actions (Escape, Enter on unstaged fields), multi-field form sequencing, shadow DOM, and iframes are out of scope for v0.1.
+- Password and file inputs are never offered; start behind a login by passing a session cookie (`cookies`, `--cookie-file`). Hover-revealed menus, keyboard actions (Escape, Enter on unstaged fields), multi-field form sequencing, shadow DOM, and iframes are out of scope for v0.1.
 - Thresholds (0.85 goal, 0.85 stuck, budgets) are starting points measured on Wikipedia and DuckDuckGo tasks. Tune them for your sites.
 - Jev is calibrated, not infallible. Treat the trace as evidence, not proof.
 

@@ -53,6 +53,20 @@ server.registerTool(
         ),
       max_chars: z.number().int().min(100).optional().describe("Override the format's default character cap."),
       screenshot: z.enum(["final", "none"]).optional().describe("Final viewport JPEG. Default 'final'."),
+      cookies: z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            value: z.string(),
+            domain: z.string().optional().describe("Defaults to the start URL's host."),
+            path: z.string().optional().describe("Defaults to '/'."),
+          }),
+        )
+        .optional()
+        .describe(
+          "Cookies added before the first navigation, e.g. a session cookie so the run starts behind a login. " +
+            "The agent never types into password fields, so this is the only way onto an authenticated page.",
+        ),
     },
   },
   async ({ task, start_url, ...rest }, extra) => {
@@ -66,6 +80,7 @@ server.registerTool(
         format: rest.format,
         maxChars: rest.max_chars,
         screenshot: rest.screenshot,
+        cookies: rest.cookies,
       },
       extra.signal,
     );

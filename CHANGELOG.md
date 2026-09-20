@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cookie seeding: `cookies` on `navigate()` and the MCP tool, and `--cookie name=value` / `--cookie-file name=@path` on the CLI, add cookies to the browser context before the first navigation. The agent never types into password fields, so this is how a run starts on an authenticated page: hand it a session cookie captured elsewhere. Domain defaults to the start URL's host, path to `/`.
+
 - Form controls now resolve an accessible name (AccName 1.2 precedence: `aria-labelledby` refs, `aria-label`, all associated native labels via the `.labels` API, then placeholder and title). Plain `<label for>` login forms no longer drop out of the action space, which previously made their inputs invisible and untypeable (#1).
 - A successful type action now records a truthful outcome (`typed into "Username"; no visible page change`) instead of `no visible change`, so the stuck watcher no longer misreads a filled field as a no-op. Repeat recovery now keys off machine state (a repeated action whose only effect was the fill, or a genuine no-op) instead of matching the display string, and no longer terminates on a `done` alternate with negligible probability.
 

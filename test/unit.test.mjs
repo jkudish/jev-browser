@@ -7,7 +7,9 @@ import {
   isNoiseHref,
   isNoiseName,
   MAX_ELEMENTS,
+  parseCookieSpec,
   pickAlternate,
+  resolveCookies,
 } from "../dist/lib.js";
 
 const el = (over = {}) => ({
@@ -85,4 +87,31 @@ test("pickAlternate returns next-best non-excluded option", () => {
 
 test("heuristicQuery strips task boilerplate", () => {
   assert.equal(heuristicQuery("Search Wikipedia for the article about Ristretto and stop on it"), "ristretto");
+});
+
+test("resolveCookies defaults domain to the start URL host and path to /", () => {
+  assert.deepEqual(resolveCookies(undefined, "https://example.com/a"), []);
+  assert.deepEqual(resolveCookies([], "https://example.com/a"), []);
+  assert.deepEqual(
+    resolveCookies(
+      [
+        { name: "session", value: "abc" },
+        { name: "pref", value: "x", domain: ".example.com", path: "/app" },
+      ],
+      "https://app.example.com:8443/start?x=1",
+    ),
+    [
+      { name: "session", value: "abc", domain: "app.example.com", path: "/" },
+      { name: "pref", value: "x", domain: ".example.com", path: "/app" },
+    ],
+  );
+  assert.throws(() => resolveCookies([{ name: "", value: "abc" }], "https://example.com"), /name and a value/);
+});
+
+test("parseCookieSpec splits on the first = only", () => {
+  assert.deepEqual(parseCookieSpec("session=abc"), { name: "session", value: "abc" });
+  assert.deepEqual(parseCookieSpec("jwt=eyJ.a=b=="), { name: "jwt", value: "eyJ.a=b==" });
+  assert.deepEqual(parseCookieSpec("empty="), { name: "empty", value: "" });
+  assert.throws(() => parseCookieSpec("novalue"), /name=value/);
+  assert.throws(() => parseCookieSpec("=x"), /name=value/);
 });
