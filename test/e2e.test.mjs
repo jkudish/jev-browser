@@ -54,7 +54,7 @@ async function startFixtureSite() {
           "Pay your tab",
           `<form action="/paid" method="get">
              <input name="email" type="text" aria-label="Email" placeholder="Email">
-             <input type="submit" value="Pay now">
+             <input type="submit" value="Pay now" aria-label="   " title="Confirm payment">
            </form>`,
         ),
       );
@@ -66,7 +66,7 @@ async function startFixtureSite() {
           "RSVP",
           `<form action="/rsvped" method="get">
              <input name="guest" type="text" aria-label="Guest name" placeholder="Guest name">
-             <input type="submit">
+             <input type="submit" title="Confirm attendance">
            </form>`,
         ),
       );

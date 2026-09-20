@@ -250,11 +250,14 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
         // (HTML-AAM: after ARIA and native labels, before title); with no value
         // the browser supplies a default label, "Submit". Without this the
         // control extracts as unlabeled noise and drops out of the action space.
+        // The UA-default label applies only when value is unspecified; an
+        // explicit empty value stays empty and falls through to title.
+        const valueAttr = el.getAttribute("value");
         const valueLabel =
           tag === "input" && typeAttr === "submit"
-            ? el.getAttribute("value") || "Submit"
+            ? valueAttr ?? "Submit"
             : tag === "input" && typeAttr === "button"
-              ? el.getAttribute("value") || ""
+              ? valueAttr ?? ""
               : "";
         const label = norm(
           labelledby ||
