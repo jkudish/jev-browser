@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Login Page</title>
+  </head>
+  <body>
+    <!-- Reproduces issue #1: plain <label for> markup, no placeholder or
+         aria-label on the inputs. Inputs are void elements, so label
+         resolution must consult the associated label elements. -->
+    <h2>Login Page</h2>
+    <p>This is where you can log into the secure area. Enter tomsmith for the username.</p>
+    <form onsubmit="return false">
+      <!-- Machine-style name/id that differ from the visible labels, so the
+           test proves label[for] resolution and not the id/name fallback. -->
+      <div>
+        <label for="login-account">Username</label>
+        <input type="text" name="acct" id="login-account" oninput="document.getElementById('echo').textContent = 'Typed: ' + this.value" />
+      </div>
+      <div>
+        <label for="login-secret">Password</label>
+        <input type="password" name="pwd" id="login-secret" />
+      </div>
+      <button type="submit">Login</button>
+    </form>
+    <p id="echo"></p>
+  </body>
+</html>

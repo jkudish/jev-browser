@@ -217,16 +217,35 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
         const tag = el.tagName.toLowerCase();
         const roleAttr = el.getAttribute("role") || "";
         const typeAttr = (el.getAttribute("type") || "").toLowerCase();
-        const label = (
-          el.getAttribute("aria-label") ||
-          el.getAttribute("placeholder") ||
-          el.getAttribute("title") ||
-          el.innerText ||
-          el.textContent ||
-          ""
-        )
-          .replace(/\s+/g, " ")
-          .trim();
+        // Accessible-name resolution for form controls (AccName 1.2 §4.3.2):
+        // aria-labelledby refs first, then aria-label, then the control's
+        // associated native labels (label[for] and wrapping labels, all of
+        // them, in tree order), then placeholder and title. Inputs are void
+        // elements: innerText is always empty, so plain <label for> forms
+        // resolve here or not at all. Candidates are normalized so a blank
+        // aria-labelledby cannot suppress the rest of the chain.
+        const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
+        const labelledby = norm(
+          (el.getAttribute("aria-labelledby") ?? "")
+            .split(/\s+/)
+            .map((ref) => document.getElementById(ref)?.textContent ?? "")
+            .join(" "),
+        );
+        const nativeLabels = norm(
+          Array.from((el as HTMLInputElement).labels ?? [])
+            .map((l) => l.textContent ?? "")
+            .join(" "),
+        );
+        const label = norm(
+          labelledby ||
+            el.getAttribute("aria-label") ||
+            nativeLabels ||
+            el.getAttribute("placeholder") ||
+            el.getAttribute("title") ||
+            el.innerText ||
+            el.textContent ||
+            "",
+        );
         const href = tag === "a" ? el.getAttribute("href") || "" : "";
         const clickable =
           ["a", "button"].includes(tag) ||
@@ -387,6 +406,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
     let lastExecuted: string | null = null;
     let lastOutcome: string | null = null;
+    // Machine state for repeat recovery, decoupled from the display string:
+    // "typed" (a fill happened but the page did not change) and "no_change"
+    // (nothing observable happened) both make a repeat proposal redundant.
+    let lastRedundant: "typed" | "no_change" | null = null;
     const history: Array<{ step: number; action: string; outcome: string }> = [];
 
     for (let step = 1; step <= maxSteps; step++) {
@@ -449,11 +472,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       // across similar elements is usually several acceptable alternatives.
       let chosen = proposed;
       let recoveryReason: string | undefined;
-      if (lastExecuted === proposed && lastOutcome === "no visible change") {
-        const alternate = pickAlternate(probabilities, new Set([proposed]));
+      if (lastExecuted === proposed && lastRedundant !== null) {
+        // "done" is excluded like "back": an alternate with any positive
+        // probability is too weak a basis to terminate the run. Termination
+        // stays with the model's own proposal and the goal/stuck watchers.
+        const alternate = pickAlternate(probabilities, new Set([proposed, "done"]));
         if (alternate) {
           chosen = alternate;
-          recoveryReason = "repeated action had no effect; switched to next-best option";
+          recoveryReason = "repeated action had no further effect; switched to next-best option";
         }
       }
 
@@ -463,6 +489,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
       let detail = chosen;
       let actionError: string | undefined;
+      let typedIntoLabel: string | null = null;
       try {
         if (chosen === "back") {
           const wentBack = await page.goBack({ waitUntil: "domcontentloaded", timeout: bounded(10_000) }).catch(() => null);
@@ -483,6 +510,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
             await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
+            typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
           }
         } else if (chosen.startsWith("select_")) {
           const opts = element.options ?? [];
@@ -519,6 +547,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const after = await pageObservables(page, bounded);
       // Execution failures are attributed to the action, not to ambient page
       // changes that happened to occur in the same window.
+      const pageUnchanged =
+        !actionError &&
+        after.url === observables.url &&
+        after.title === observables.title &&
+        Math.abs(after.textLength - observables.textLength) <= 50 &&
+        Math.abs(after.scrollY - observables.scrollY) <= 40;
       const outcome = actionError
         ? "action failed"
         : after.url !== observables.url
@@ -529,7 +563,13 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
               ? "page content changed"
               : Math.abs(after.scrollY - observables.scrollY) > 40
                 ? "scrolled"
-                : "no visible change";
+                : typedIntoLabel !== null
+                  ? // A fill is a real effect even when nothing navigates: the
+                    // field now holds text. Say so, or the stuck watcher
+                    // misreads a successful type as a no-op.
+                    `typed into "${typedIntoLabel}"; no visible page change`
+                  : "no visible change";
+      lastRedundant = pageUnchanged ? (typedIntoLabel !== null ? "typed" : "no_change") : null;
 
       lastExecuted = chosen;
       lastOutcome = outcome;

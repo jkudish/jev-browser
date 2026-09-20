@@ -116,3 +116,45 @@ test("clean termination on a hard page (informational)", { skip: !hasKey }, asyn
     assert.ok(typedOk || challenged, "expected successful typing or a DuckDuckGo challenge page");
   });
 });
+
+// Regression for issue #1: <label for> forms with no placeholder must surface
+// their text inputs in the action space. Pre-fix, this page offered zero
+// typeable elements and the agent declared done without acting.
+test("label-for inputs appear in the action space and can be typed into", { skip: !hasKey }, async () => {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const fixture = readFileSync(fileURLToPath(new URL("./fixtures/login.html", import.meta.url)));
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(fixture);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Type the word tomsmith into the username input field and stop",
+            start_url: `http://127.0.0.1:${port}/`,
+            max_steps: 5,
+            max_seconds: 60,
+          },
+        },
+        undefined,
+        { timeout: 120_000 },
+      );
+      const body = payload(result);
+      // The username input is the only typeable element (password fields are
+      // excluded by design), so any executed type action proves the fix; the
+      // outcome naming the label[for] text (not the id/name) pins resolution.
+      const typed = body.steps.find((s) => /^type_/.test(s.executed_action ?? "") && !s.action_error);
+      assert.ok(typed, `no type action executed: ${JSON.stringify(body.steps.map((s) => [s.proposed_action, s.executed_action]))}`);
+      assert.match(typed.outcome ?? "", /typed into "Username"/);
+      assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}`);
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
