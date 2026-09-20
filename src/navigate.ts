@@ -222,8 +222,8 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
         // associated native labels (label[for] and wrapping labels, all of
         // them, in tree order), then placeholder and title. Inputs are void
         // elements: innerText is always empty, so plain <label for> forms
-        // resolve here or not at all. Candidates are normalized so a blank
-        // aria-labelledby cannot suppress the rest of the chain.
+        // resolve here or not at all. Every candidate is normalized before the
+        // fallback chain so a blank attribute cannot suppress the rest of it.
         const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
         const labelledby = norm(
           (el.getAttribute("aria-labelledby") ?? "")
@@ -246,17 +246,25 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
         const submitControl =
           (tag === "button" && (typeAttr === "submit" || (!el.hasAttribute("type") && el.closest("form") !== null))) ||
           (tag === "input" && typeAttr === "submit");
-        // Submit button inputs carry their visible label in the value attribute.
-        const valueLabel = tag === "input" && ["submit", "button"].includes(typeAttr) ? el.getAttribute("value") || "" : "";
+        // Submit button inputs carry their visible label in the value attribute
+        // (HTML-AAM: after ARIA and native labels, before title); with no value
+        // the browser supplies a default label, "Submit". Without this the
+        // control extracts as unlabeled noise and drops out of the action space.
+        const valueLabel =
+          tag === "input" && typeAttr === "submit"
+            ? el.getAttribute("value") || "Submit"
+            : tag === "input" && typeAttr === "button"
+              ? el.getAttribute("value") || ""
+              : "";
         const label = norm(
           labelledby ||
-            el.getAttribute("aria-label") ||
+            norm(el.getAttribute("aria-label")) ||
             nativeLabels ||
-            el.getAttribute("placeholder") ||
-            el.getAttribute("title") ||
-            valueLabel ||
-            el.innerText ||
-            el.textContent ||
+            norm(valueLabel) ||
+            norm(el.getAttribute("placeholder")) ||
+            norm(el.getAttribute("title")) ||
+            norm(el.innerText) ||
+            norm(el.textContent) ||
             "",
         );
         const href = tag === "a" ? el.getAttribute("href") || "" : "";

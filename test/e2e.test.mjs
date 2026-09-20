@@ -48,6 +48,30 @@ async function startFixtureSite() {
            </form>`,
         ),
       );
+    } else if (url.pathname === "/pay") {
+      res.end(
+        page(
+          "Pay your tab",
+          `<form action="/paid" method="get">
+             <input name="email" type="text" aria-label="Email" placeholder="Email">
+             <input type="submit" value="Pay now">
+           </form>`,
+        ),
+      );
+    } else if (url.pathname === "/paid") {
+      res.end(page("Payment sent", `<p>email=${url.searchParams.get("email") ?? ""}</p>`));
+    } else if (url.pathname === "/rsvp") {
+      res.end(
+        page(
+          "RSVP",
+          `<form action="/rsvped" method="get">
+             <input name="guest" type="text" aria-label="Guest name" placeholder="Guest name">
+             <input type="submit">
+           </form>`,
+        ),
+      );
+    } else if (url.pathname === "/rsvped") {
+      res.end(page("See you there", `<p>guest=${url.searchParams.get("guest") ?? ""}</p>`));
     } else if (url.pathname === "/found") {
       res.end(page("Results", `<p>Ristretto: a short shot of espresso (${url.searchParams.get("q") ?? ""})</p>`));
     } else {
@@ -327,6 +351,80 @@ test("form submission: the submit button is a submit_eN action", { skip: !hasKey
         !body.steps.some((s) => s.executed_action?.startsWith("click_")),
         "the submit control must not be stamped click_",
       );
+    });
+  } finally {
+    site.close();
+  }
+});
+
+// Regression: input[type=submit] carries its label in the value attribute, so
+// it must appear in the action space labeled "Pay now" (not as unlabeled noise)
+// and execute as submit_eN, never click_eN.
+test("input submit control: the value attribute labels it", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Submit the payment form and stop on the confirmation page",
+            start_url: `${site.baseUrl}/pay`,
+            max_steps: 5,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      assert.ok(
+        ["done", "goal_achieved"].includes(body.status),
+        `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+      );
+      assert.match(body.final_url, /\/paid/);
+      const submitStep = body.steps.find((s) => s.executed_action?.startsWith("submit_"));
+      assert.ok(submitStep, `no submit step: ${JSON.stringify(body.steps)}`);
+      assert.match(submitStep.detail ?? "", /"Pay now"/, `unexpected submit detail: ${submitStep.detail}`);
+      assert.ok(
+        !body.steps.some((s) => s.executed_action?.startsWith("click_")),
+        "the submit control must not be stamped click_",
+      );
+    });
+  } finally {
+    site.close();
+  }
+});
+
+// Regression: input[type=submit] with no value attribute would extract as an
+// empty label and drop out of the action space entirely, making the form
+// unsubmittable. The browser-default label "Submit" must keep it stamped.
+test("input submit without a value keeps the default Submit label", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(async (client) => {
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Submit the RSVP form and stop on the confirmation page",
+            start_url: `${site.baseUrl}/rsvp`,
+            max_steps: 5,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 180_000 },
+      );
+      const body = payload(result);
+      assert.ok(
+        ["done", "goal_achieved"].includes(body.status),
+        `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+      );
+      assert.match(body.final_url, /\/rsvped/);
+      const submitStep = body.steps.find((s) => s.executed_action?.startsWith("submit_"));
+      assert.ok(submitStep, `no submit step: ${JSON.stringify(body.steps)}`);
+      assert.match(submitStep.detail ?? "", /"Submit"/, `unexpected submit detail: ${submitStep.detail}`);
     });
   } finally {
     site.close();
