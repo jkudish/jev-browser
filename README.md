@@ -159,13 +159,13 @@ Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus on
 {
   "status": "done",
   "final_url": "https://en.wikipedia.org/wiki/Ristretto",
-  "elapsed_ms": 5894,
+  "elapsed_ms": 3601,
   "steps": [
     { "step": 1, "proposed_action": "click_e2", "executed_action": "click_e2", "detail": "a \"Search Wikipedia [f]\" -> /wiki/Special:Search", "confidence": 1.0 },
-    { "step": 2, "proposed_action": "type_e1", "executed_action": "type_e1", "detail": "typed \"Ristretto\" via openrouter", "confidence": 0.99 },
-    { "step": 3, "proposed_action": "done", "executed_action": null, "detail": "done proposed; not executed", "confidence": 1.0 }
+    { "step": 2, "proposed_action": "search_e1", "executed_action": "search_e1", "detail": "searched \"Ristretto\" via openrouter", "confidence": 0.99 },
+    { "step": 3, "proposed_action": "done", "executed_action": null, "detail": "done proposed; not executed", "confidence": 0.99 }
   ],
-  "usage": { "jev_calls": 3, "input_tokens": 45810, "est_cost_usd": 0.0021 }
+  "usage": { "jev_calls": 3, "input_tokens": 51748, "est_cost_usd": 0.0022 }
 }
 ```
 
@@ -188,7 +188,9 @@ Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing
 
 ## How it decides
 
-Each step makes one primary Jev call with three questions over the same state: an action Choice over the page's interactive elements plus scroll/back/done, a goal Noul, and a stuck Noul ([fan-out pattern](https://docs.typesafe.ai/patterns/fan-out.md)). The state includes a short excerpt of the page's visible text, so the goal judgment can see content, not just URLs and links. A select action adds one second-stage Choice for its option. Elements come from the DOM directly, not the accessibility tree, because accessibility trees under-report inputs; the agent found DuckDuckGo's search box only after this switch. Actions: click, type, select a native dropdown, scroll, back, done.
+Each step makes one primary Jev call with three questions over the same state: an action Choice over the page's interactive elements plus scroll/back/done, a goal Noul, and a stuck Noul ([fan-out pattern](https://docs.typesafe.ai/patterns/fan-out.md)). The state includes a short excerpt of the page's visible text, so the goal judgment can see content, not just URLs and links. A select action adds one second-stage Choice for its option. Elements come from the DOM directly, not the accessibility tree, because accessibility trees under-report inputs; the agent found DuckDuckGo's search box only after this switch. Actions: click, search, type, select a native dropdown, submit, scroll, back, done.
+
+Three of those actions move text or forms, and the boundaries are deliberate. Search boxes, identified structurally as `input[type=search]` or `role=searchbox` and nothing else, get a single `search_eN` action that types the query and runs the search in one step. Submit controls (`button[type=submit]`, `input[type=submit]`, and a `button` with no type attribute inside a form) are offered as `submit_eN` instead of `click_eN`. Every other single-line text field offers two actions: `type_eN`, which types without submitting, and `submit_eN`, which presses Enter on that field to submit. So filling one field of a multi-field form never submits it under the agent's feet, and a field that only looks like a search box (a plain text input in a div with a JavaScript Enter handler) never gets the one-action search.
 
 Stop conditions, in code, checked before executing the step's proposed action: the agent chooses `done`, goal probability > 0.85, stuck probability > 0.85, the step budget, or the time budget. A repeated action with no effect switches to the next-best option from the Choice distribution. There is deliberately no low-confidence override: split probability across several similar elements is usually several acceptable alternatives, not uncertainty.
 
@@ -226,7 +228,7 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 
 - Up to 240 elements per step; Jev's Choice supports 255 options. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages.
 - The markdown format converts the whole body, so it carries navigation chrome and can include inline script text; a readability pass is a candidate improvement, not a committed one.
-- Password and file inputs are never offered. Hover-revealed menus, keyboard actions (Escape, Enter on unstaged fields), multi-field form sequencing, shadow DOM, and iframes are out of scope for v0.1.
+- Password and file inputs are never offered. Hover-revealed menus, keyboard actions other than Enter within the explicit search and submit actions (Escape, Tab, arrow keys), shadow DOM, and iframes are out of scope for v0.1.
 - Thresholds (0.85 goal, 0.85 stuck, budgets) are starting points measured on Wikipedia and DuckDuckGo tasks. Tune them for your sites.
 - Jev is calibrated, not infallible. Treat the trace as evidence, not proof.
 

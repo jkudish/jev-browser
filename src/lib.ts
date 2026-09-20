@@ -14,6 +14,9 @@ export interface RawElement {
   clickable: boolean;
   typeable: boolean;
   selectable?: boolean; // native <select>
+  searchField?: boolean; // input[type=search] or role=searchbox: structurally a search box, by markup alone
+  submitControl?: boolean; // button[type=submit], input[type=submit], or a type-less <button> inside a form
+  enterSubmittable?: boolean; // single-line text field: Enter submits its form (or runs the site's handler)
   options?: string[]; // option labels for selects
 }
 
@@ -21,8 +24,9 @@ export interface RawElement {
 export interface PageElement {
   id: string; // e1, e2, ...
   attr: string;
-  kind: "click" | "type" | "select";
+  kind: "click" | "type" | "select" | "submit" | "search";
   description: string;
+  submitVia?: "click" | "enter"; // for kind === "submit": click the control, or press Enter on the field
   options?: string[]; // for kind === "select": the native option labels
 }
 
@@ -65,22 +69,54 @@ export function buildActionSpace(raw: RawElement[]): { elements: PageElement[]; 
       seenHrefs.add(key);
     }
     if (!el.clickable && !el.typeable && !el.selectable) continue;
+    // Search-like fields are stamped search_eN alone: fill and Enter in one
+    // action, replacing the type/submit twins. Structural only, so a plain
+    // text field that merely looks like a search box keeps type + submit and
+    // can never be auto-submitted by search_eN.
+    // Submit controls are offered as submit_eN, never click_eN, so a form
+    // submission always appears in the trace as an explicit decision.
+    const kind: "click" | "type" | "select" | "submit" | "search" = el.searchField
+      ? "search"
+      : el.submitControl
+        ? "submit"
+        : el.typeable
+          ? "type"
+          : el.selectable
+            ? "select"
+            : "click";
     const id = `e${elements.length + 1}`;
     const label = el.text.slice(0, 60);
-    const kind: "click" | "type" | "select" = el.typeable ? "type" : el.selectable ? "select" : "click";
     const hrefTail = el.href ? ` -> ${el.href.replace(/^https?:\/\//, "").slice(0, 70)}` : "";
     elements.push({
       id,
       attr: el.attr,
       kind,
+      submitVia: kind === "submit" ? "click" : undefined,
       description:
-        kind === "type"
-          ? `${el.tag} "${label}" (type into this field)`
-          : kind === "select"
-            ? `${el.tag} "${label}" (dropdown; a follow-up picks the option)`
-            : `${el.tag} "${label}"${hrefTail}`,
+        kind === "search"
+          ? `${el.tag} "${label}" (type into this search box and run the search)`
+          : kind === "submit"
+            ? `${el.tag} "${label}" (submit the form now)`
+            : kind === "type"
+              ? `${el.tag} "${label}" (type without submitting)`
+              : kind === "select"
+                ? `${el.tag} "${label}" (dropdown; a follow-up picks the option)`
+                : `${el.tag} "${label}"${hrefTail}`,
       options: kind === "select" ? (el.options ?? []) : undefined,
     });
+    // Non-search single-line text fields additionally offer submit (press
+    // Enter), which keeps Enter-driven flows reachable as two explicit steps:
+    // type, then submit. One stamped action per entry, so ids, the
+    // MAX_ELEMENTS cap, and the criteria mapping all keep their shape.
+    if (kind === "type" && el.enterSubmittable && elements.length < MAX_ELEMENTS) {
+      elements.push({
+        id: `e${elements.length + 1}`,
+        attr: el.attr,
+        kind: "submit",
+        submitVia: "enter",
+        description: `${el.tag} "${label}" (submit the form now)`,
+      });
+    }
   }
   return { elements, truncated: elements.length >= MAX_ELEMENTS };
 }
@@ -106,7 +142,9 @@ export function selectorFor(el: PageElement): string {
 export function pickAlternate(probabilities: Record<string, number> | undefined, exclude: Set<string>): string | null {
   const ranked = Object.entries(probabilities ?? {}).sort((a, b) => b[1] - a[1]);
   for (const [option, p] of ranked) {
-    if (option === "back") continue;
+    // back is a judgment the recovery should not make for the agent; done is a
+    // stop gate, not an executable element action (executing it would error).
+    if (option === "back" || option === "done") continue;
     if (exclude.has(option)) continue;
     if (p <= 0) continue;
     return option;

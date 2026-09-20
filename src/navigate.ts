@@ -236,12 +236,25 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
             .map((l) => l.textContent ?? "")
             .join(" "),
         );
+        // Search-like fields, by structure alone: input[type=search] or
+        // role=searchbox. No form-membership or label-text heuristics here:
+        // a plain text field that only looks like a search box is a real form
+        // field and must keep type + submit, not a one-action search.
+        const searchField = (tag === "input" && typeAttr === "search") || roleAttr === "searchbox";
+        // Submit controls: an explicit submission affordance. A <button> with
+        // no type attribute defaults to submit inside a form.
+        const submitControl =
+          (tag === "button" && (typeAttr === "submit" || (!el.hasAttribute("type") && el.closest("form") !== null))) ||
+          (tag === "input" && typeAttr === "submit");
+        // Submit button inputs carry their visible label in the value attribute.
+        const valueLabel = tag === "input" && ["submit", "button"].includes(typeAttr) ? el.getAttribute("value") || "" : "";
         const label = norm(
           labelledby ||
             el.getAttribute("aria-label") ||
             nativeLabels ||
             el.getAttribute("placeholder") ||
             el.getAttribute("title") ||
+            valueLabel ||
             el.innerText ||
             el.textContent ||
             "",
@@ -255,6 +268,9 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
           tag === "textarea" ||
           (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
           ["searchbox", "textbox"].includes(roleAttr);
+        // Enter submits from single-line fields (implicit form submission, or
+        // the site's own Enter handler); a textarea Enter is just a newline.
+        const enterSubmittable = typeable && tag !== "textarea";
         const selectable = tag === "select";
         if (!clickable && !typeable && !selectable) continue;
         const attr = `j${out.length + 1}`;
@@ -266,7 +282,7 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
                 .filter(Boolean)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, selectable, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, searchField, submitControl, enterSubmittable, selectable, options });
       }
       return out;
     });
@@ -484,7 +500,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
 
       const element = elements.find(
-        (e) => chosen === `click_${e.id}` || chosen === `type_${e.id}` || chosen === `select_${e.id}`,
+        (e) =>
+          chosen === `click_${e.id}` || chosen === `type_${e.id}` || chosen === `select_${e.id}` || chosen === `submit_${e.id}` || chosen === `search_${e.id}`,
       );
 
       let detail = chosen;
@@ -507,10 +524,29 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             actionError = "typing disabled by caller";
           } else {
             const generated = await generateTextToType(budget, task, element.description, page.url());
+            // Fill only: submitting is a separate submit_eN decision, so an
+            // ordinary form is never submitted mid-task by a field fill.
             await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
-            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
             detail = `typed "${generated.text}" via ${generated.via}`;
             typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+          }
+        } else if (chosen.startsWith("search_")) {
+          if (!allowTyping) {
+            actionError = "typing disabled by caller";
+          } else {
+            const generated = await generateTextToType(budget, task, element.description, page.url());
+            await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
+            detail = `searched "${generated.text}" via ${generated.via}`;
+            typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+          }
+        } else if (chosen.startsWith("submit_")) {
+          if (element.submitVia === "click") {
+            await page.click(selectorFor(element), { timeout: bounded(4_000) });
+            detail = `submitted form: ${element.description}`;
+          } else {
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
+            detail = `submitted form: Enter on ${element.description}`;
           }
         } else if (chosen.startsWith("select_")) {
           const opts = element.options ?? [];
