@@ -692,6 +692,8 @@ test("injected credential pages suppress the screenshot even before any fill", a
     assert.equal(page.isClosed(), false);
   } finally {
     await browser.close();
+  }
+});
 
 // ── Typing selection and degradation records (src/lib.ts) ────────────────────
 import {

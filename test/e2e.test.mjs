@@ -874,6 +874,9 @@ test("password fill: injected page works under the same guards and never closes 
   } finally {
     await browser.close();
     await fixture.close();
+  }
+});
+
 // ── Issue #2: typing degradation is visible and ordinary fields never get soup ──
 
 // The dead typing provider: a strict JEV_BROWSER_TYPE_PROVIDER=openrouter
