@@ -657,3 +657,40 @@ test("navigate refuses credential runs on a recording injected page", async (t) 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("injected credential pages suppress the screenshot even before any fill", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  // The page ALREADY shows the value the way a logged-in session or a
+  // caller-typed field would: no fill ever happens in this run, and the
+  // final screenshot must still be suppressed, because JPEG bytes cannot
+  // be redacted.
+  await page.setContent(
+    "<title>Logged in</title><main>welcome back, unit-visible-secret-value</main>",
+  );
+  try {
+    const result = await navigate({
+      task: "Read the page",
+      page,
+      maxSeconds: 0,
+      password: { value: "unit-visible-secret-value", origin: "https://example.com" },
+    });
+    assert.equal(result.status, "timeout");
+    assert.equal(result.screenshot_base64_jpeg, null, "screenshot bytes must be suppressed on injected credential pages");
+    assert.equal(result.screenshot_suppressed, "credential-fill");
+    assert.equal(result.password_filled, undefined);
+    assert.equal(page.isClosed(), false);
+  } finally {
+    await browser.close();
+  }
+});

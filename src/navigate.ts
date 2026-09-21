@@ -480,7 +480,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // exposed, so the final screenshot stays suppressed. passwordFilled is set
   // only when a fill actually landed; a refused fill (wrong origin, element
   // changed) must not report success.
-  let credentialUsed = false;
+  // An injected page may already visibly contain or reflect the configured
+  // value before any fill: a caller-typed login field, a logged-in page that
+  // echoes it. Owned runs cannot (the value only reaches the page through a
+  // fill), so exposure starts armed exactly for injected credential pages.
+  let credentialUsed = Boolean(options.password && options.page);
   let passwordFilled = false;
 
   let browser: Browser | null = null;
@@ -714,7 +718,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             );
             const pickedIndex = Number((optionAnswer.option.choice as string).slice(1));
             const opt = opts[pickedIndex] ?? opts[0];
-            await page.selectOption(selectorFor(element), { index: opt.i });
+            await page.selectOption(selectorFor(element), { index: opt.i }, { timeout: bounded(4_000) });
             detail = `selected "${opt.label}"`;
           }
         } else if (chosen.startsWith("fill_password_")) {
