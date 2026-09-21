@@ -144,7 +144,7 @@ console.log(result.page.content);
 
 ## Password fill (logins)
 
-The agent can fill native password fields without the password ever reaching a model. The value arrives through one of three channels, lives in memory for a single run, and is scrubbed from every state, trace, error, URL, and payload the run produces. Video recording is refused on credential runs and the final screenshot is suppressed once a fill is attempted. A fill never submits: no Enter, no click.
+The agent can fill native password fields without the password ever reaching a model. The value arrives through one of three channels, lives in memory for a single run, and is scrubbed from every state, trace, error, URL, and payload the run produces. Video recording is refused on credential runs and the final screenshot is suppressed once a fill is attempted (on injected pages, which may already show the value, from the start of the run). A fill never submits: no Enter, no click.
 
 Set the trust anchor once, in the MCP server's environment:
 

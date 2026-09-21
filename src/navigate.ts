@@ -46,7 +46,8 @@ export interface NavigateOptions {
    * Credential run: fill native password inputs on this exact origin with this
    * value. The value is redacted from every state, trace, error, payload, and
    * result this function produces; recording is refused and the final
-   * screenshot is suppressed once a fill is attempted. Never source this from
+   * screenshot is suppressed once a fill is attempted (from the start on
+   * injected pages, which may already show the value). Never source this from
    * anything model-composed (see src/password.ts for the delivery channels).
    */
   password?: { value: string; origin: string };
