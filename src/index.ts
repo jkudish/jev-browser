@@ -39,6 +39,7 @@ server.registerTool(
       "the stuck gate fires, or a budget (steps/seconds) is exhausted. Returns the final page in a chosen format " +
       "(text, markdown, html, or an aria snapshot), the full step trace with confidences, console/page/network " +
       "errors captured along the way, token usage with estimated cost, and a final screenshot. " +
+      "The result also reports typing degradation explicitly (degraded, warnings with codes, typing_provider, typing_model), so a failed typing generator is visible instead of silently typing keyword soup. " +
       "For logins: with JEV_BROWSER_PASSWORD_ORIGIN set in this server's environment, password_file or password_env " +
       "fills native password fields on that origin only, without the value ever entering model context, traces, or " +
       "screenshots; never put the password value itself in any argument or in the task.",
@@ -54,7 +55,7 @@ server.registerTool(
       allow_typing: z
         .boolean()
         .optional()
-        .describe("Whether the agent may type into fields (uses the configured small model, or a keyword fallback). Default true."),
+        .describe("Whether the agent may type into fields. Uses the configured small model; when it fails, ordinary fields are left empty with a warning and search boxes fall back to a keyword heuristic. Default true."),
       format: z
         .enum(["text", "markdown", "html", "aria"])
         .optional()

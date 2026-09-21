@@ -15,10 +15,11 @@ const hasKey = Boolean(process.env.TYPESAFE_API_KEY);
 
 // Minimal deterministic site: a multi-field form with a submit button (the
 // button carries no type attribute, so it defaults to submit inside the form),
-// and a search box with no submit button at all. The search box is a plain
-// text input on purpose: only input[type=search]/role=searchbox get the
+// and a search box with no submit button at all. The /find search box is a
+// plain text input on purpose: only input[type=search]/role=searchbox get the
 // one-action search_eN, so this one must stay reachable the explicit way,
-// type then submit_eN pressing Enter.
+// type then submit_eN pressing Enter. /lookup carries a real type=search
+// input, which is the page the search_eN degradation tests run against.
 async function startFixtureSite() {
   const requests = [];
   const page = (title, body) =>
@@ -40,6 +41,15 @@ async function startFixtureSite() {
       );
     } else if (url.pathname === "/joined") {
       res.end(page("Application received", `<p>first=${url.searchParams.get("first") ?? ""} city=${url.searchParams.get("city") ?? ""}</p>`));
+    } else if (url.pathname === "/lookup") {
+      res.end(
+        page(
+          "Lookup",
+          `<form action="/found" method="get">
+             <input name="q" type="search" aria-label="Search drinks">
+           </form>`,
+        ),
+      );
     } else if (url.pathname === "/find") {
       res.end(
         page(
@@ -83,6 +93,33 @@ async function startFixtureSite() {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   return { requests, baseUrl: `http://127.0.0.1:${address.port}`, close: () => server.close() };
+}
+
+// A local OpenAI chat-completions shaped endpoint standing in for the typing
+// provider: deterministic replies, offline runs, and a record of what the
+// typing generator actually asked for.
+async function startFakeTypingAPI(reply) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      requests.push({ url: req.url ?? "", body });
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          id: "chatcmpl-fake",
+          object: "chat.completion",
+          created: 0,
+          model: "fake-typing-model",
+          choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { requests, baseUrl: `http://127.0.0.1:${server.address().port}`, close: () => server.close() };
 }
 
 async function withClient(fn, extraEnv = {}) {
@@ -211,8 +248,10 @@ test("label-for inputs appear in the action space and can be typed into", { skip
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
+  const typing = await startFakeTypingAPI("tomsmith");
   try {
-    await withClient(async (client) => {
+    await withClient(
+      async (client) => {
       const result = await client.callTool(
         {
           name: "jev_navigate",
@@ -235,8 +274,21 @@ test("label-for inputs appear in the action space and can be typed into", { skip
       assert.match(typed.outcome ?? "", /typed into "Username"/);
       assert.ok(!body.steps.some((s) => /Password/.test(s.outcome ?? "")), "a password input must not be offered without a source, even with a role override");
       assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}`);
-    });
+      // Clean run: no degradation, and the typing configuration actually used
+      // is reported verbatim (provider label plus the model override).
+      assert.equal(body.degraded, false);
+      assert.deepEqual(body.warnings, []);
+      assert.equal(body.typing_provider, "compatible-endpoint");
+      assert.equal(body.typing_model, "fake-typing-model");
+      assert.match(typed.detail ?? "", /^typed "tomsmith" via compatible-endpoint$/);
+      },
+      {
+        JEV_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1`,
+        JEV_BROWSER_TYPE_MODEL: "fake-typing-model",
+      },
+    );
   } finally {
+    typing.close();
     await new Promise((resolve) => server.close(resolve));
   }
 });
@@ -587,8 +639,10 @@ test("password fill: misconfigured handoff files fail loudly, before any browser
 
 test("multi-field form: typing fields does not submit the form", { skip: !hasKey }, async () => {
   const site = await startFixtureSite();
+  const typing = await startFakeTypingAPI("Ada");
   try {
-    await withClient(async (client) => {
+    await withClient(
+      async (client) => {
       const result = await client.callTool(
         {
           name: "jev_navigate",
@@ -615,16 +669,22 @@ test("multi-field form: typing fields does not submit the form", { skip: !hasKey
         !site.requests.some((r) => r.includes("/joined")),
         `the form was submitted anyway; requests: ${site.requests.join(", ")}`,
       );
-    });
+      assert.equal(body.degraded, false);
+      },
+      { JEV_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1` },
+    );
   } finally {
+    typing.close();
     site.close();
   }
 });
 
 test("search flow: type then submit reaches the results page", { skip: !hasKey }, async () => {
   const site = await startFixtureSite();
+  const typing = await startFakeTypingAPI("ristretto");
   try {
-    await withClient(async (client) => {
+    await withClient(
+      async (client) => {
       const result = await client.callTool(
         {
           name: "jev_navigate",
@@ -655,8 +715,12 @@ test("search flow: type then submit reaches the results page", { skip: !hasKey }
       assert.ok(typeStep.step < submitStep.step, "submit must follow the typed step");
       assert.ok(!/^navigated/.test(typeStep.outcome ?? ""), "typing alone must not submit the search");
       assert.match(submitStep.detail ?? "", /Enter/, `unexpected submit detail: ${submitStep.detail}`);
-    });
+      assert.equal(body.degraded, false);
+      },
+      { JEV_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1` },
+    );
   } finally {
+    typing.close();
     site.close();
   }
 });
@@ -810,5 +874,203 @@ test("password fill: injected page works under the same guards and never closes 
   } finally {
     await browser.close();
     await fixture.close();
+// ── Issue #2: typing degradation is visible and ordinary fields never get soup ──
+
+// The dead typing provider: a strict JEV_BROWSER_TYPE_PROVIDER=openrouter
+// selection whose endpoint points at a closed port. The run must complete
+// (no isError), the type_eN step must record an action error and type
+// nothing, and the result must carry the structured degradation records.
+const DEAD_TYPING_ENV = {
+  JEV_BROWSER_TYPE_PROVIDER: "openrouter",
+  OPENROUTER_API_KEY: "sk-or-v1-0000000000000000000000000000",
+  JEV_BROWSER_TYPE_BASE_URL: "http://127.0.0.1:1",
+};
+
+test("degraded type_eN: a dead typing provider types nothing and reports structured warnings (#2)", async () => {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const fixture = readFileSync(fileURLToPath(new URL("./fixtures/login.html", import.meta.url)));
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(fixture);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Type the word tomsmith into the username input field and stop",
+              start_url: `http://127.0.0.1:${port}/`,
+              max_steps: 4,
+              max_seconds: 60,
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        // Degradation is not an error: the run completed, only typing did not.
+        assert.notEqual(result.isError, true);
+        const failedType = body.steps.find((s) => s.action_error === "typing generator failed; nothing was typed");
+        assert.ok(failedType, `expected a failed type step: ${JSON.stringify(body.steps)}`);
+        assert.ok(!body.steps.some((s) => /^typed "/.test(s.detail ?? "")), "nothing may be typed when the generator fails");
+        assert.equal(body.degraded, true);
+        const warning = body.warnings.find((w) => w.code === "typing_generator_error");
+        assert.ok(warning, `expected a typing_generator_error warning: ${JSON.stringify(body.warnings)}`);
+        assert.equal(warning.step, failedType.step);
+        assert.equal(warning.provider, "openrouter");
+        assert.equal(warning.model, "google/gemini-2.5-flash-lite");
+        assert.ok(warning.message.length <= 200, `warning message must stay short: ${warning.message}`);
+        // Port 1 is on fetch's blocked-port list, so the SDK words the failure
+        // "bad port" instead of ECONNREFUSED; either way the dead endpoint
+        // shows up in the short summary, and never a raw response body.
+        assert.match(warning.message, /Cannot connect to API|ECONNREFUSED/);
+        assert.ok(!("fallback" in warning), "ordinary fields get no heuristic fallback");
+        assert.ok(!("finish_reason" in warning));
+        assert.equal(body.typing_provider, "openrouter");
+        assert.equal(body.typing_model, "google/gemini-2.5-flash-lite");
+      },
+      DEAD_TYPING_ENV,
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("degraded search_eN: a dead typing provider still searches via the keyword heuristic (#2)", async () => {
+  const site = await startFixtureSite();
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: 'Search this site for "ristretto" and stop on the results page',
+              start_url: `${site.baseUrl}/lookup`,
+              max_steps: 4,
+              max_seconds: 90,
+            },
+          },
+          undefined,
+          { timeout: 180_000 },
+        );
+        const body = payload(result);
+        assert.notEqual(result.isError, true);
+        assert.ok(
+          ["done", "goal_achieved"].includes(body.status),
+          `status was ${body.status}: ${JSON.stringify(body.steps)}`,
+        );
+        assert.match(body.final_url, /\/found\?q=/);
+        assert.ok(site.requests.some((r) => r.startsWith("GET /found")), `results never requested: ${site.requests.join(", ")}`);
+        // The search-tuned heuristic ran after the generator failed, and the
+        // step detail says so explicitly.
+        const searched = body.steps.find((s) => /^search_/.test(s.executed_action ?? "") && !s.action_error);
+        assert.ok(searched, `expected a search step: ${JSON.stringify(body.steps)}`);
+        assert.equal(searched.detail, 'searched "ristretto results" via keyword-heuristic-after-generator-error');
+        assert.equal(body.degraded, true);
+        const warning = body.warnings.find((w) => w.code === "typing_generator_error");
+        assert.ok(warning, `expected a typing_generator_error warning: ${JSON.stringify(body.warnings)}`);
+        assert.equal(warning.fallback, "keyword-heuristic");
+        assert.equal(warning.step, searched.step);
+        assert.equal(body.typing_provider, "openrouter");
+      },
+      DEAD_TYPING_ENV,
+    );
+  } finally {
+    site.close();
+  }
+});
+
+test("JEV_BROWSER_TYPE_PROVIDER is strict: unknown provider or missing key refuses to start (#2)", async () => {
+  await withClient(
+    async (client) => {
+      const args = {
+        name: "jev_navigate",
+        arguments: { task: "x", start_url: "https://example.com/", max_steps: 1, max_seconds: 10 },
+      };
+      // An unknown value names no provider at all, on every call: no key
+      // in the environment can rescue it and no other provider is tried.
+      const unknown = await client.callTool(args, undefined, { timeout: 30_000 });
+      assert.equal(unknown.isError, true);
+      assert.match(unknown.content.find((b) => b.type === "text").text, /JEV_BROWSER_TYPE_PROVIDER "bogus" is not a known typing provider/);
+      const unknownAgain = await client.callTool(args, undefined, { timeout: 30_000 });
+      assert.equal(unknownAgain.isError, true);
+    },
+    { JEV_BROWSER_TYPE_PROVIDER: "bogus" },
+  );
+  await withClient(
+    async (client) => {
+      const rejected = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: { task: "x", start_url: "https://example.com/", max_steps: 1, max_seconds: 10 },
+        },
+        undefined,
+        { timeout: 30_000 },
+      );
+      assert.equal(rejected.isError, true);
+      assert.match(rejected.content.find((b) => b.type === "text").text, /ANTHROPIC_API_KEY/);
+    },
+    { JEV_BROWSER_TYPE_PROVIDER: "anthropic" },
+  );
+});
+
+test("CLI: a strict typing-config failure exits nonzero with one stderr line (#2)", async () => {
+  const child = spawn(process.execPath, [serverPath, "run", "x", "https://example.com/"], {
+    env: { ...process.env, JEV_BROWSER_TYPE_PROVIDER: "bogus", TYPESAFE_API_KEY: "" },
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const code = await new Promise((resolve) => child.on("close", (exitCode) => resolve(exitCode)));
+  assert.notEqual(code, 0, `expected a nonzero exit, stderr: ${stderr}`);
+  assert.match(stderr, /navigate: .*JEV_BROWSER_TYPE_PROVIDER/);
+});
+
+test("allow_typing false ignores typing configuration entirely (#2)", async () => {
+  const { createServer } = await import("node:http");
+  const { readFileSync } = await import("node:fs");
+  const fixture = readFileSync(fileURLToPath(new URL("./fixtures/login.html", import.meta.url)));
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(fixture);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "The task is already complete; stop immediately without doing anything",
+              start_url: `http://127.0.0.1:${port}/`,
+              max_steps: 2,
+              max_seconds: 30,
+              allow_typing: false,
+            },
+          },
+          undefined,
+          { timeout: 90_000 },
+        );
+        const body = payload(result);
+        assert.notEqual(result.isError, true);
+        assert.ok(["done", "goal_achieved", "stuck"].includes(body.status), `status was ${body.status}`);
+        // Typing is off, so a broken typing config is none of this run's
+        // business: no degradation, and no typing configuration reported.
+        assert.equal(body.degraded, false);
+        assert.deepEqual(body.warnings, []);
+        assert.equal(body.typing_provider, null);
+        assert.equal(body.typing_model, null);
+      },
+      { JEV_BROWSER_TYPE_PROVIDER: "bogus" },
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
   }
 });

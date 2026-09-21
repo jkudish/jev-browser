@@ -29,7 +29,7 @@ Full-resolution video: [assets/github-demo.mp4](assets/github-demo.mp4).
 
 ## Install
 
-Requires Node.js 20 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
+Requires Node.js 22 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
 
 ### Let an agent install it for you
 
@@ -266,7 +266,11 @@ Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus on
     { "step": 2, "proposed_action": "search_e1", "executed_action": "search_e1", "detail": "searched \"Ristretto\" via openrouter", "confidence": 0.99 },
     { "step": 3, "proposed_action": "done", "executed_action": null, "detail": "done proposed; not executed", "confidence": 0.99 }
   ],
-  "usage": { "jev_calls": 3, "input_tokens": 51748, "est_cost_usd": 0.0022 }
+  "usage": { "jev_calls": 3, "input_tokens": 51748, "est_cost_usd": 0.0022 },
+  "degraded": false,
+  "warnings": [],
+  "typing_provider": "openrouter",
+  "typing_model": "google/gemini-2.5-flash-lite"
 }
 ```
 
@@ -287,6 +291,8 @@ Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing
 
 **A debug trace you can audit.** One record per step: the proposed action versus the action actually executed, why a recovery fired, action errors, the Choice confidence, the top option's probability, and the goal and stuck probabilities for that step. Stop statuses say which gate fired. Alongside the trace: console errors, page errors, and failed network requests captured per step and tagged with the page they came from, up to 200 events, plus Jev call counts, token usage, and estimated cost. If the final payload or screenshot could not be extracted, the run still returns and lists the problem under `extraction_problems`.
 
+**Typing degradation, visible or it did not happen.** Every result, success or error, carries `degraded` (boolean), `warnings` (array), and `typing_provider`/`typing_model` (what a typing action would use, or null when nothing is configured or typing is disabled). A clean run reports `degraded: false` and an empty `warnings` array. Each warning has the shape `{ code, step, message, provider, model, finish_reason?, fallback? }` with one of four codes: `typing_fallback_no_provider` (no typing provider configured), `typing_generator_empty` (the model returned no text), `typing_generator_error` (the provider call failed), or `typing_configuration_error` (the typing endpoint rejected the request as malformed). Warning messages are short summaries, never raw provider response bodies. Degradation never turns a completed run into a tool error or a nonzero CLI exit; the CLI prints one line to stderr and the JSON tells the rest.
+
 ## How it decides
 
 Each step makes one primary Jev call with three questions over the same state: an action Choice over the page's interactive elements plus scroll/back/done, a goal Noul, and a stuck Noul ([fan-out pattern](https://docs.typesafe.ai/patterns/fan-out.md)). The state includes a short excerpt of the page's visible text, so the goal judgment can see content, not just URLs and links. A select action adds one second-stage Choice for its option. Elements come from the DOM directly, not the accessibility tree, because accessibility trees under-report inputs; the agent found DuckDuckGo's search box only after this switch. Actions: click, search, type, select a native dropdown, submit, scroll, back, done.
@@ -299,22 +305,26 @@ Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired)
 
 ## The typing model
 
-Jev never generates text. It returns typed decisions only: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs at most once or twice per task, about 48 tokens per call.
+Jev never generates text. It returns typed decisions only: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs once per typed field, so a multi-field form makes one call per field. Each call is capped at 256 output tokens on OpenRouter (reasoning is disabled there, since reasoning models can burn the whole budget on hidden tokens and return empty text) and 48 tokens on every other provider.
 
-Configuration is automatic when possible. The server picks the first provider whose key it recognizes, in this order:
+`JEV_PROVIDER` is not involved here at all: it selects the transport for the Jev judgments and has nothing to do with typing. Typing configuration is a separate set of variables.
+
+Configuration is automatic when possible. With no typing overrides set, the server picks the first provider whose key it recognizes, in this order:
 
 | Provider | Recognized by | Default model |
 | --- | --- | --- |
 | OpenAI | `OPENAI_API_KEY` starting with `sk-` | `gpt-5.6-luna` |
-| OpenRouter | `OPENROUTER_API_KEY` starting with `sk-or-` | `openai/gpt-5.6-luna` |
+| OpenRouter | `OPENROUTER_API_KEY` starting with `sk-or-` | `google/gemini-2.5-flash-lite` |
 | Anthropic | `ANTHROPIC_API_KEY` starting with `sk-ant-` | `claude-haiku-4.5` |
 | Google | `GEMINI_API_KEY` or `GOOGLE_GENERATIVE_AI_API_KEY` starting with `AIza` | `gemini-2.5-flash` |
 
+Mind the trap in that order: a stale `OPENAI_API_KEY` left in the environment silently wins detection even when your real key is OpenRouter's. `typing_provider` in the result always names what a run actually used.
+
 Overrides:
 
-- `JEV_BROWSER_TYPE_MODEL` picks any model the resolved provider offers, for example `openrouter:anthropic/claude-haiku-4.5` style ids.
-- `JEV_BROWSER_TYPE_PROVIDER` forces one of `openai`, `openrouter`, `anthropic`, `google`, skipping auto-detection.
-- `JEV_BROWSER_TYPE_BASE_URL` (plus `JEV_BROWSER_TYPE_API_KEY` if it needs one) points at any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, a gateway. This wins over provider detection.
+- `JEV_BROWSER_TYPE_MODEL` picks any model the resolved provider offers. The value passes through unchanged, so use the provider's plain model id, for example `anthropic/claude-haiku-4.5` on OpenRouter (no `openrouter:` prefix).
+- `JEV_BROWSER_TYPE_PROVIDER` strictly selects one of `openai`, `openrouter`, `anthropic`, `google`. No other provider is tried: an unknown value, or a missing or malformed key for the named provider, is a configuration error and the run refuses to start before any browser opens. Runs with `allow_typing: false` ignore typing configuration entirely.
+- `JEV_BROWSER_TYPE_BASE_URL` (plus `JEV_BROWSER_TYPE_API_KEY` if it needs one) points at any OpenAI-compatible endpoint: Ollama, LM Studio, vLLM, a gateway. On its own it selects that endpoint regardless of any cloud keys present; combined with `JEV_BROWSER_TYPE_PROVIDER` it becomes the named provider's endpoint instead of its public one. It must be an absolute http(s) URL or the run refuses to start.
 
 Local example, no cloud key at all:
 
@@ -323,7 +333,7 @@ JEV_BROWSER_TYPE_BASE_URL=http://localhost:11434/v1 JEV_BROWSER_TYPE_MODEL=qwen2
   npx -y @jkudish/jev-browser run "Search Wikipedia for Ristretto and stop on the article" https://en.wikipedia.org/wiki/Main_Page
 ```
 
-With no provider at all, typing falls back to a keyword heuristic built from the task text. It is labeled honestly in the trace (`via keyword-heuristic`), and it is meaningfully worse: in testing its queries buried a target article eight results pages deep. Give it a real model if your tasks type anything.
+With no provider at all, or when the typing model fails or returns empty text, the two field kinds part ways. A `search_eN` field falls back to a keyword heuristic built from the task text (labeled `via keyword-heuristic` or `via keyword-heuristic-after-generator-error` in the trace; it is meaningfully worse: in testing its queries buried a target article eight results pages deep). An ordinary `type_eN` field types nothing at all: the step records an action error ("typing generator failed; nothing was typed") rather than filling a username or email field with task keywords, which used to look like a typing attempt while guaranteeing failure. Both cases are reported as structured warnings (see above), so a silent wrong-text fill and a silent empty field are both impossible. Give it a real model if your tasks type anything.
 
 ## Limits
 
@@ -340,7 +350,7 @@ With no provider at all, typing falls back to a keyword heuristic built from the
 | `TYPESAFE_API_KEY` | none | TypeSafe direct. Default provider when set. |
 | `OPENROUTER_API_KEY` | none | Powers both the Jev judgments (when `TYPESAFE_API_KEY` is absent) and, optionally, the typing model. One key runs everything. |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. |
-| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. |
+| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. |
 | `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
