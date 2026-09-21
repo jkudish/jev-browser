@@ -144,7 +144,7 @@ console.log(result.page.content);
 
 ## Password fill (logins)
 
-The agent can fill native password fields without the password ever reaching a model. The value arrives through one of three channels, lives in memory for a single run, and is scrubbed from every state, trace, error, URL, and payload the run produces. Video recording is refused on credential runs and the final screenshot is suppressed once a fill is attempted. A fill never submits: no Enter, no click.
+The agent can fill native password fields without the password ever reaching a model. The value arrives through one of three channels, lives in memory for a single run, and is scrubbed from every state, trace, error, URL, and payload the run produces. Video recording is refused on credential runs and the final screenshot is suppressed once a fill is attempted (on injected pages, which may already show the value, from the start of the run). A fill never submits: no Enter, no click.
 
 Set the trust anchor once, in the MCP server's environment:
 
@@ -208,6 +208,40 @@ Rules and limits of the mechanism, stated plainly:
 - Redaction is defense in depth: raw, percent-encoded, form-encoded, HTML-encoded, markdown-escaped, whitespace-normalized, and YAML-escaped (aria snapshots) echoes of the value are scrubbed from everything the run returns, including values a page reflects into its own labels, attributes, console output, or URLs after the fill. On credential runs every capture window (labels, options, hrefs, excerpts, error strings) is sized to the longest known representation of the value, so an echo is always captured whole and redacted before any length cap can cut it; dropdowns are selected by DOM index, never by a label string; the task itself is scrubbed before any model sees it, so "the model never sees the value" holds even if a caller ignores this advice and puts it in the task. Secrets containing a line break or any control character, or whose echo-normalized form (whitespace collapsed, zero-width characters stripped) collapses below the safe redaction length, are rejected up front (produce it with `op read --no-newline` or equivalent). Redaction cannot cover arbitrary transformations, process-memory inspection, or OS-level monitoring. For the same reason, credential runs refuse any Playwright debug output (`PWDEBUG`, any nonempty `DEBUG`, `DEBUG_FILE`) and video recording.
 - On runs without a password source, password inputs are skipped during extraction entirely: the feature costs nothing when unused.
 - Every password field the model fills in a run receives the same configured value; this is for logging in, not for setting new passwords. `allow_typing: false` disables the feature entirely.
+
+
+## Reuse an existing Playwright page
+
+Pass an existing Playwright `Page` when the browser, context, or session is owned by your application. This is useful for logged-in sessions and for applications that already manage the browser lifecycle. When `page` is supplied, `startUrl` is optional; if both are supplied, navigation starts by going to `startUrl`. Jev Browser never closes the injected page, context, or browser.
+
+```js
+import { chromium } from "playwright";
+import { navigate } from "@jkudish/jev-browser";
+
+const browser = await chromium.launch({ headless: false });
+const context = await browser.newContext({ storageState: "./auth.json" });
+const page = await context.newPage();
+
+try {
+  const result = await navigate({
+    task: "Find the price of the Pro plan",
+    page,
+    maxSteps: 16,
+  });
+
+  if ("error" in result) throw new Error(result.error);
+  console.log(result.status, result.final_url);
+} finally {
+  await browser.close();
+}
+```
+
+Notes for injected pages:
+
+- Video recording is refused: `recordDir` belongs to the context Jev Browser creates, and an injected context cannot get it, so `recordDir` plus `page` throws up front. Password runs are also refused when the injected page itself is being recorded, because video frames cannot be redacted.
+- Password fill works the same as on owned runs: the same delivery channels, origin binding, and redaction apply, and the caller's browser is never closed.
+- Your own tracing or HAR recording on the caller side is invisible to Jev Browser and captures everything the page sees, including filled values. If a credential run may pass through, stop tracing first; that is operator responsibility, same as with any other Playwright tooling.
+- Treat the injected context as exclusively Jev Browser's for the duration of the run: every new page the context gains is observed, and the most recent one can become the active page (same adoption rule as owned runs). Pages your own code opens concurrently in that context can therefore redirect the run and mix their diagnostics into its result, so open unrelated tabs only after the run returns.
 
 ## The tool
 

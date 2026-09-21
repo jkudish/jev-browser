@@ -3,7 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -31,7 +31,10 @@ const CREDENTIAL_VISIBLE = { label: 80, option: 120, href: 120 };
 
 export interface NavigateOptions {
   task: string;
-  startUrl: string;
+  /** Start URL for an internally-created page. Omit when `page` is supplied. */
+  startUrl?: string;
+  /** Reuse an existing Playwright page instead of launching a new browser. */
+  page?: Page;
   maxSteps?: number;
   maxSeconds?: number;
   allowTyping?: boolean;
@@ -43,7 +46,8 @@ export interface NavigateOptions {
    * Credential run: fill native password inputs on this exact origin with this
    * value. The value is redacted from every state, trace, error, payload, and
    * result this function produces; recording is refused and the final
-   * screenshot is suppressed once a fill is attempted. Never source this from
+   * screenshot is suppressed once a fill is attempted (from the start on
+   * injected pages, which may already show the value). Never source this from
    * anything model-composed (see src/password.ts for the delivery channels).
    */
   password?: { value: string; origin: string };
@@ -400,6 +404,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // Credential-run guards run before any timer, listener, or browser is
   // armed: a rejected direct-library call must not leak the deadline timer
   // (or the caller's abort listener) for maxSeconds.
+  // Injected-page guards share the pre-timer region: a rejected call must not
+  // leak the deadline timer or the caller's abort listener either.
+  if (options.page && options.recordDir) {
+    throw new Error("navigate(): video recording is refused on runs with an injected page");
+  }
+  if (!options.page && !startUrl) {
+    throw new Error("startUrl is required when page is not supplied");
+  }
   let redactor: Redactor | null = null;
   let trustedOrigin: string | null = null;
   let passwordValue: string | null = null;
@@ -411,6 +423,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     trustedOrigin = origin;
     assertNoPlaywrightDebug();
     if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with a password source");
+    // A caller context created with recordVideo (or page.video() non-null for
+    // any reason) records the injected page too, and video frames cannot be
+    // redacted, so credential runs refuse it exactly like recordDir.
+    if (options.page?.video()) throw new Error("navigate(): password runs are refused on an injected page that is being recorded");
     // Validate here, not just in the CLI/MCP adapters: library callers call
     // navigate() directly, and an invalid secret (CR/LF, below-minimum or
     // normalization-collapsing length) could never be redacted reliably.
@@ -465,10 +481,18 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // exposed, so the final screenshot stays suppressed. passwordFilled is set
   // only when a fill actually landed; a refused fill (wrong origin, element
   // changed) must not report success.
-  let credentialUsed = false;
+  // An injected page may already visibly contain or reflect the configured
+  // value before any fill: a caller-typed login field, a logged-in page that
+  // echoes it. Owned runs cannot (the value only reaches the page through a
+  // fill), so exposure starts armed exactly for injected credential pages.
+  let credentialUsed = Boolean(options.password && options.page);
   let passwordFilled = false;
 
   let browser: Browser | null = null;
+  let ownsBrowser = false;
+  let observedContext: BrowserContext | null = null;
+  let onNewPage: ((page: Page) => void) | null = null;
+  const observerCleanups: Array<() => void> = [];
   let status = "error";
 
   const recordEvent = (event: Omit<ConsoleEvent, "step">) => {
@@ -482,39 +506,55 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const attachPageObservers = (p: Page) => {
     // Redaction happens on the full string before any cap: a truncated echo
     // of the secret would otherwise survive the slice boundary.
-    p.on("console", (msg) => {
+    const onConsole = (msg: ConsoleMessage) => {
       const type = msg.type();
       if (type !== "error" && type !== "warning") return;
       recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: R(msg.text()).slice(0, 300), page: R(p.url()).slice(0, 120) });
-    });
-    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: R(String(err)).slice(0, 300), page: R(p.url()).slice(0, 120) }));
-    p.on("requestfailed", (req) =>
+    };
+    const onPageError = (err: Error) => recordEvent({ type: "page_error", text: R(String(err)).slice(0, 300), page: R(p.url()).slice(0, 120) });
+    const onRequestFailed = (req: Request) =>
       recordEvent({
         type: "request_failed",
         text: R(`${req.method()} ${req.url()} ${req.failure()?.errorText ?? ""}`).slice(0, 300),
         page: R(p.url()).slice(0, 120),
-      }),
-    );
+      });
+    p.on("console", onConsole);
+    p.on("pageerror", onPageError);
+    p.on("requestfailed", onRequestFailed);
+    observerCleanups.push(() => {
+      p.off("console", onConsole);
+      p.off("pageerror", onPageError);
+      p.off("requestfailed", onRequestFailed);
+    });
   };
 
   try {
-    browser = await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
-    const context = await browser.newContext({
-      viewport: { width: 1024, height: 640 },
-      ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
-    });
+    ownsBrowser = !options.page;
+    browser = options.page ? null : await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
+    const context: BrowserContext = options.page
+      ? options.page.context()
+      : await browser!.newContext({
+          viewport: { width: 1024, height: 640 },
+          ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
+        });
+    observedContext = context;
     // No Playwright default (30s) may ever outlive the run budget.
-    context.setDefaultTimeout(8_000);
-    let page = await context.newPage();
+    if (ownsBrowser) {
+      context.setDefaultTimeout(8_000);
+    }
+    let page = options.page ?? (await context.newPage());
     const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
     let pendingPage: Page | null = null;
-    context.on("page", (p) => {
+    onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
       pendingPage = p;
-    });
+    };
+    context.on("page", onNewPage);
 
-    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+    if (startUrl) {
+      await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+    }
 
     let lastExecuted: string | null = null;
     // Machine state for repeat recovery, decoupled from the display string:
@@ -679,7 +719,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             );
             const pickedIndex = Number((optionAnswer.option.choice as string).slice(1));
             const opt = opts[pickedIndex] ?? opts[0];
-            await page.selectOption(selectorFor(element), { index: opt.i });
+            await page.selectOption(selectorFor(element), { index: opt.i }, { timeout: bounded(4_000) });
             detail = `selected "${opt.label}"`;
           }
         } else if (chosen.startsWith("fill_password_")) {
@@ -808,7 +848,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
     }
 
-    await browser.close().catch(() => {});
+    if (ownsBrowser) await browser?.close().catch(() => {});
     const videoPath = (await videoPathPromise?.catch(() => undefined)) ?? null;
     const result = {
       status,
@@ -853,7 +893,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   } finally {
     clearTimeout(deadlineTimer);
     externalSignal?.removeEventListener("abort", onExternalAbort);
-    await browser?.close().catch(() => {});
+    if (observedContext && onNewPage) observedContext.off("page", onNewPage);
+    for (const cleanup of observerCleanups.splice(0).reverse()) cleanup();
+    if (ownsBrowser) await browser?.close().catch(() => {});
   }
 }
 
