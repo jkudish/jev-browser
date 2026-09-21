@@ -403,6 +403,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // Credential-run guards run before any timer, listener, or browser is
   // armed: a rejected direct-library call must not leak the deadline timer
   // (or the caller's abort listener) for maxSeconds.
+  // Injected-page guards share the pre-timer region: a rejected call must not
+  // leak the deadline timer or the caller's abort listener either.
+  if (options.page && options.recordDir) {
+    throw new Error("navigate(): video recording is refused on runs with an injected page");
+  }
+  if (!options.page && !startUrl) {
+    throw new Error("startUrl is required when page is not supplied");
+  }
   let redactor: Redactor | null = null;
   let trustedOrigin: string | null = null;
   let passwordValue: string | null = null;
@@ -414,6 +422,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     trustedOrigin = origin;
     assertNoPlaywrightDebug();
     if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with a password source");
+    // A caller context created with recordVideo (or page.video() non-null for
+    // any reason) records the injected page too, and video frames cannot be
+    // redacted, so credential runs refuse it exactly like recordDir.
+    if (options.page?.video()) throw new Error("navigate(): password runs are refused on an injected page that is being recorded");
     // Validate here, not just in the CLI/MCP adapters: library callers call
     // navigate() directly, and an invalid secret (CR/LF, below-minimum or
     // normalization-collapsing length) could never be redacted reliably.
@@ -512,9 +524,6 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   };
 
   try {
-    if (!options.page && !startUrl) {
-      throw new Error("startUrl is required when page is not supplied");
-    }
     ownsBrowser = !options.page;
     browser = options.page ? null : await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
     const context: BrowserContext = options.page
