@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { chromium } from "playwright";
+import { navigate } from "../dist/navigate.js";
 
 const serverPath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const hasKey = Boolean(process.env.TYPESAFE_API_KEY);
@@ -768,5 +770,45 @@ test("input submit without a value keeps the default Submit label", { skip: !has
     });
   } finally {
     site.close();
+  }
+});
+
+test("password fill: injected page works under the same guards and never closes the caller's browser", { skip: !hasKey }, async () => {
+  const fixture = await serveFixture("password.html");
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(`${fixture.origin}/`, { waitUntil: "domcontentloaded" });
+
+    const body = await navigate({
+      task: "Fill the password field with the configured password, then stop",
+      page,
+      maxSteps: 5,
+      maxSeconds: 60,
+      password: { value: SECRET, origin: fixture.origin },
+    });
+
+    const fill = body.steps.find((s) => /^fill_password_/.test(s.executed_action ?? "") && !s.action_error);
+    assert.ok(fill, `no fill executed: ${JSON.stringify(body.steps.map((s) => [s.proposed_action, s.executed_action, s.action_error]))}`);
+    assert.match(fill.detail ?? "", /filled password into "Password"; not submitted/);
+    assert.equal(body.password_filled, true);
+    assert.equal(body.screenshot_suppressed, "credential-fill");
+    assert.equal(body.screenshot_base64_jpeg, null, "screenshot bytes must be suppressed after a fill");
+    assert.ok(body.page.content.includes("PW_FILLED"), "the page should show the fill marker");
+    assert.ok(!body.page.content.includes("SUBMITTED"), "the form must never be submitted by a fill");
+    assert.ok(body.page.content.includes("mirror: [REDACTED]"), "a reflected echo must be redacted in the payload");
+    const echo = (body.console_events ?? []).find((e) => e.type === "console_error");
+    assert.ok(echo, "the fixture's console.error echo should be captured");
+    assert.match(echo.text, /echo: \[REDACTED\]/);
+    const haystack = JSON.stringify(body);
+    for (const variant of [SECRET, encodeURIComponent(SECRET), SECRET.replace(/([&<>"'])/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c)]) {
+      assert.ok(!haystack.includes(variant), "the secret (or an encoded echo) leaked into the library result");
+    }
+    assert.equal(page.isClosed(), false, "the caller's page must stay open");
+    assert.ok(browser.isConnected(), "the caller's browser must stay open");
+  } finally {
+    await browser.close();
+    await fixture.close();
   }
 });

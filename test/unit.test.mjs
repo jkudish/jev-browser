@@ -566,6 +566,7 @@ test("navigate reuses an injected Playwright page and leaves its lifecycle to th
     throw error;
   }
   const context = await browser.newContext();
+  context.setDefaultTimeout(250);
   const page = await context.newPage();
   page.setDefaultTimeout(1_234);
   await page.setContent("<title>Existing session</title><main>Session content</main>");
@@ -581,9 +582,78 @@ test("navigate reuses an injected Playwright page and leaves its lifecycle to th
     assert.equal(result.status, "timeout");
     assert.equal(result.final_title, "Existing session");
     assert.match(result.page?.content ?? "", /Session content/);
-    assert.equal(page.getDefaultTimeout(), 1_234);
     assert.equal(page.isClosed(), false);
+
+    // Playwright exposes no default-timeout getter, so preservation is
+    // asserted behaviorally: an auto-waiting op with no explicit timeout must
+    // reject under the caller's defaults (1_234ms page, 250ms context), far
+    // below the 8s that owned contexts get. Generous margins; timing only.
+    const tPage = Date.now();
+    await assert.rejects(() => page.waitForSelector("#jev-timeout-probe-page"));
+    assert.ok(Date.now() - tPage < 4_000, "page default timeout was not preserved");
+    const probe = await context.newPage();
+    try {
+      const tContext = Date.now();
+      await assert.rejects(() => probe.waitForSelector("#jev-timeout-probe-context"));
+      assert.ok(Date.now() - tContext < 4_000, "context default timeout was not preserved");
+    } finally {
+      await probe.close();
+    }
   } finally {
     await browser.close();
+  }
+});
+
+test("navigate refuses recordDir on an injected page before touching it", async () => {
+  const explosive = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        throw new Error(`injected page must not be touched (read .${String(prop)})`);
+      },
+    },
+  );
+  // The guard must fire on options alone: any property access on the proxy
+  // (video(), context(), url) fails the test.
+  await assert.rejects(
+    () => navigate({ task: "x", page: explosive, recordDir: "/tmp/jev-unused", startUrl: "https://example.com" }),
+    /refused on runs with an injected page/,
+  );
+});
+
+test("navigate requires startUrl when no page is supplied", async () => {
+  await assert.rejects(() => navigate({ task: "x" }), /startUrl is required/);
+});
+
+test("navigate refuses credential runs on a recording injected page", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const dir = await mkdtemp(join(tmpdir(), "jev-rec-refusal-"));
+  try {
+    const context = await browser.newContext({ recordVideo: { dir } });
+    const page = await context.newPage();
+    await assert.rejects(
+      () =>
+        navigate({
+          task: "x",
+          page,
+          startUrl: "https://example.com",
+          password: { value: "unit-secret-value", origin: "https://example.com" },
+        }),
+      /injected page that is being recorded/,
+    );
+    assert.equal(page.isClosed(), false);
+    await context.close(); // stops the recording
+  } finally {
+    await browser.close();
+    await rm(dir, { recursive: true, force: true });
   }
 });
