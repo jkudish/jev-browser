@@ -932,3 +932,61 @@ test("generateTextToType: deadline aborts propagate instead of degrading", async
     globalThis.fetch = realFetch;
   }
 });
+
+test("generateTextToType: BASE_URL routes every named provider to the configured endpoint", async () => {
+  const realFetch = globalThis.fetch;
+  const seenUrls = [];
+  globalThis.fetch = async (url) => {
+    seenUrls.push(String(url));
+    return chatCompletion("x");
+  };
+  try {
+    const cases = [
+      ["openai", { OPENAI_API_KEY: "sk-openai-key-0123456789" }],
+      ["anthropic", { ANTHROPIC_API_KEY: "sk-ant-anthropic-key-0123456789" }],
+      ["google", { GEMINI_API_KEY: "AIza-google-key-0123456789" }],
+    ];
+    for (const [provider, key] of cases) {
+      const generator = createTypingGenerator({
+        JEV_BROWSER_TYPE_PROVIDER: provider,
+        JEV_BROWSER_TYPE_BASE_URL: "http://proxy.internal/api",
+        ...key,
+      });
+      assert.equal(generator.provider, provider);
+      await generateTextToType(new AbortController().signal, generator, "task", "the field", "https://x.test/").catch(() => {});
+      assert.ok(
+        seenUrls.some((u) => u.startsWith("http://proxy.internal/api")),
+        `${provider} did not use the configured base URL (seen: ${seenUrls.join(", ")})`,
+      );
+      seenUrls.length = 0;
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("generateTextToType: the google provider generates without a compatibility cast", async () => {
+  const realFetch = globalThis.fetch;
+  let seen;
+  globalThis.fetch = async (url, init) => {
+    seen = { url: String(url), body: JSON.parse(init.body) };
+    return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: "ristretto" }] }, finishReason: "STOP" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  try {
+    const generator = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789" });
+    assert.equal(generator.provider, "google");
+    const out = await generateTextToType(new AbortController().signal, generator, "task", "the search box", "https://x.test/");
+    assert.deepEqual(out, { ok: true, text: "ristretto", via: "google" });
+    assert.match(seen.url, /generativelanguage\.googleapis\.com/);
+    assert.equal(seen.body.generationConfig.maxOutputTokens, 48); // tight cap, no openrouter options
+    // google models reasoning controls via generationConfig.thinkingConfig; the
+    // openrouter reasoning namespace must not leak into any google request
+    assert.equal(seen.body.generationConfig.thinkingConfig, undefined);
+    assert.equal(seen.body.generationConfig.reasoning, undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -131,12 +131,22 @@ export async function runCli(argv: string[]): Promise<number> {
     }
   }
   try {
-    const result = (await navigate({
-      ...navigateArgs,
-      screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
-      recordDir,
-      password,
-    })) as Record<string, any>;
+    let result: Record<string, any>;
+    try {
+      result = (await navigate({
+        ...navigateArgs,
+        screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
+        recordDir,
+        password,
+      })) as Record<string, any>;
+    } catch (error) {
+      // Configuration refusals (typing provider, credential guards) surface as
+      // one stderr line and exit code 2, never a stack trace. The return
+      // still passes through the outer finally, so scratch recording
+      // directories are cleaned up on this path too.
+      console.error(`navigate: ${(error as Error).message}`);
+      return 2;
+    }
     if (recordPath?.endsWith(".webm") && result.video_path) {
       const fs = await import("node:fs/promises");
       // Playwright can flush the video for a moment after close; wait for the
@@ -170,11 +180,6 @@ export async function runCli(argv: string[]): Promise<number> {
 
     console.log(JSON.stringify(result, null, 2));
     return result.status === "error" ? 1 : 0;
-  } catch (error) {
-    // Configuration refusals (typing provider, credential guards) surface as
-    // one stderr line and exit code 2, never a stack trace.
-    console.error(`navigate: ${(error as Error).message}`);
-    return 2;
   } finally {
     if (tempRecordDir) {
       const fs = await import("node:fs/promises");

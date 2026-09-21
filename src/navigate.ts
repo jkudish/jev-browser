@@ -142,7 +142,11 @@ export function createTypingGenerator(env: NodeJS.ProcessEnv = process.env): Typ
   if (!selection) return null;
   switch (selection.provider) {
     case "openai":
-      return { provider: "openai", modelId: selection.modelId, model: createOpenAI({ apiKey: env.OPENAI_API_KEY! })(selection.modelId) };
+      return {
+        provider: "openai",
+        modelId: selection.modelId,
+        model: createOpenAI({ apiKey: env.OPENAI_API_KEY!, ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}) })(selection.modelId),
+      };
     case "openrouter": {
       const provider = createOpenAICompatible({
         name: "openrouter",
@@ -152,15 +156,21 @@ export function createTypingGenerator(env: NodeJS.ProcessEnv = process.env): Typ
       return { provider: "openrouter", modelId: selection.modelId, model: provider(selection.modelId) };
     }
     case "anthropic":
-      return { provider: "anthropic", modelId: selection.modelId, model: createAnthropic({ apiKey: env.ANTHROPIC_API_KEY! })(selection.modelId) };
+      return {
+        provider: "anthropic",
+        modelId: selection.modelId,
+        model: createAnthropic({ apiKey: env.ANTHROPIC_API_KEY!, ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}) })(selection.modelId),
+      };
     case "google":
       return {
         provider: "google",
         modelId: selection.modelId,
-        // @ai-sdk/google@1.x still speaks model spec v1 while the core and the
-        // other providers moved to v2+; pass it through the way the previous
-        // resolution did (the runtime contract is unchanged).
-        model: createGoogleGenerativeAI({ apiKey: (env.GOOGLE_GENERATIVE_AI_API_KEY ?? env.GEMINI_API_KEY)! })(selection.modelId) as unknown as TypingGenerator["model"],
+        // @ai-sdk/google@2 speaks model spec v2, matching the ai@7 core; no
+        // compatibility cast is needed or wanted here.
+        model: createGoogleGenerativeAI({
+          apiKey: (env.GOOGLE_GENERATIVE_AI_API_KEY ?? env.GEMINI_API_KEY)!,
+          ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}),
+        })(selection.modelId),
       };
     default: {
       const provider = createOpenAICompatible({
