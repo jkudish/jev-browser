@@ -241,6 +241,7 @@ Notes for injected pages:
 - Video recording is refused: `recordDir` belongs to the context Jev Browser creates, and an injected context cannot get it, so `recordDir` plus `page` throws up front. Password runs are also refused when the injected page itself is being recorded, because video frames cannot be redacted.
 - Password fill works the same as on owned runs: the same delivery channels, origin binding, and redaction apply, and the caller's browser is never closed.
 - Your own tracing or HAR recording on the caller side is invisible to Jev Browser and captures everything the page sees, including filled values. If a credential run may pass through, stop tracing first; that is operator responsibility, same as with any other Playwright tooling.
+- Treat the injected context as exclusively Jev Browser's for the duration of the run: every new page the context gains is observed, and the most recent one can become the active page (same adoption rule as owned runs). Pages your own code opens concurrently in that context can therefore redirect the run and mix their diagnostics into its result, so open unrelated tabs only after the run returns.
 
 ## The tool
 
