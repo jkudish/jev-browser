@@ -197,3 +197,180 @@ export function heuristicQuery(task: string): string {
 
 /** jev-1.12 published pricing: input $0.042 per M tokens, output free. */
 export const PRICE_PER_MTOK_IN = 0.042;
+
+// ── Typing generator selection and degradation records ──────────────────────
+
+/** Warning codes reported in the navigate() result when typing degraded. */
+export type TypingWarningCode =
+  | "typing_fallback_no_provider"
+  | "typing_generator_empty"
+  | "typing_generator_error"
+  | "typing_configuration_error";
+
+/** One structured typing-degradation record in the result's warnings array. */
+export interface TypingWarning {
+  code: TypingWarningCode;
+  step: number;
+  message: string;
+  provider: string | null;
+  model: string | null;
+  finish_reason?: string;
+  fallback?: string;
+}
+
+/** Provider error text is capped hard: warnings travel inside result JSON. */
+export const TYPING_WARNING_MESSAGE_MAX = 200;
+
+/** Build one TypingWarning; optional fields stay absent, not null, when unset. */
+export function typingWarning(
+  code: TypingWarningCode,
+  step: number,
+  fields: { message: string; provider: string | null; model: string | null; finishReason?: string; fallback?: string },
+): TypingWarning {
+  const warning: TypingWarning = {
+    code,
+    step,
+    message: fields.message.slice(0, TYPING_WARNING_MESSAGE_MAX),
+    provider: fields.provider,
+    model: fields.model,
+  };
+  if (fields.finishReason !== undefined) warning.finish_reason = fields.finishReason;
+  if (fields.fallback !== undefined) warning.fallback = fields.fallback;
+  return warning;
+}
+
+/** One named typing provider, as auto-detectable by key shape. */
+export interface TypingCandidateSpec {
+  provider: "openai" | "openrouter" | "anthropic" | "google";
+  keyEnv: string[]; // env vars that may hold the key; first defined wins
+  keyLabel: string; // human key-shape description for error messages
+  keyPattern: RegExp;
+  defaultModel: string;
+}
+
+/** Named typing providers in auto-detection order. */
+export const TYPING_CANDIDATES: TypingCandidateSpec[] = [
+  { provider: "openai", keyEnv: ["OPENAI_API_KEY"], keyLabel: "an sk- key", keyPattern: /^sk-/, defaultModel: "gpt-5.6-luna" },
+  { provider: "openrouter", keyEnv: ["OPENROUTER_API_KEY"], keyLabel: "an sk-or- key", keyPattern: /^sk-or-/, defaultModel: "google/gemini-2.5-flash-lite" },
+  { provider: "anthropic", keyEnv: ["ANTHROPIC_API_KEY"], keyLabel: "an sk-ant- key", keyPattern: /^sk-ant-/, defaultModel: "claude-haiku-4.5" },
+  { provider: "google", keyEnv: ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"], keyLabel: "an AIza key", keyPattern: /^AIza/, defaultModel: "gemini-2.5-flash" },
+];
+
+/** Resolved typing configuration, before any provider client is built. */
+export interface TypingSelection {
+  provider: "openai" | "openrouter" | "anthropic" | "google" | "compatible-endpoint";
+  modelId: string;
+  /** JEV_BROWSER_TYPE_BASE_URL: a custom OpenAI-compatible endpoint on its own, or the endpoint of the explicitly selected provider. */
+  baseUrl?: string;
+}
+
+function envKey(env: NodeJS.ProcessEnv, names: string[]): string {
+  for (const name of names) {
+    const value = env[name];
+    if (value !== undefined) return value;
+  }
+  return "";
+}
+
+/**
+ * Resolve the typing generator configuration from an env record. Pure.
+ *
+ * - JEV_BROWSER_TYPE_PROVIDER, when set, selects ONLY that provider: an
+ *   unknown value, or a missing or malformed key for it, throws, because the
+ *   run must fail up front instead of silently using another provider.
+ * - JEV_BROWSER_TYPE_BASE_URL selects a custom OpenAI-compatible endpoint on
+ *   its own, or becomes the endpoint of the explicitly selected provider.
+ * - With neither set, auto-detection picks the first candidate whose key is
+ *   present and shape-valid, in TYPING_CANDIDATES order.
+ * - Returns null when nothing is configured.
+ */
+export function resolveTypingSelection(env: NodeJS.ProcessEnv): TypingSelection | null {
+  const modelEnv = env.JEV_BROWSER_TYPE_MODEL?.trim() || undefined;
+  const baseUrl = env.JEV_BROWSER_TYPE_BASE_URL?.trim() || undefined;
+  const providerEnv = env.JEV_BROWSER_TYPE_PROVIDER?.trim().toLowerCase() || undefined;
+
+  if (baseUrl) {
+    let parsed: URL;
+    try {
+      parsed = new URL(baseUrl);
+    } catch {
+      throw new Error("JEV_BROWSER_TYPE_BASE_URL must be a valid absolute http(s) URL, e.g. http://localhost:11434/v1");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("JEV_BROWSER_TYPE_BASE_URL must be an http(s) URL");
+    }
+  }
+
+  if (providerEnv) {
+    const candidate = TYPING_CANDIDATES.find((c) => c.provider === providerEnv);
+    if (!candidate) {
+      throw new Error(
+        `JEV_BROWSER_TYPE_PROVIDER "${providerEnv}" is not a known typing provider; expected one of ${TYPING_CANDIDATES.map((c) => c.provider).join(", ")}`,
+      );
+    }
+    const key = envKey(env, candidate.keyEnv);
+    if (key.length <= 20 || !candidate.keyPattern.test(key)) {
+      throw new Error(
+        `JEV_BROWSER_TYPE_PROVIDER=${candidate.provider} requires ${candidate.keyEnv.join(" or ")} to be set to a valid key (${candidate.keyLabel}); no other typing provider will be tried`,
+      );
+    }
+    return { provider: candidate.provider, modelId: modelEnv ?? candidate.defaultModel, baseUrl };
+  }
+
+  if (baseUrl) {
+    return { provider: "compatible-endpoint", modelId: modelEnv ?? "gpt-5.6-luna", baseUrl };
+  }
+
+  for (const candidate of TYPING_CANDIDATES) {
+    const key = envKey(env, candidate.keyEnv);
+    if (key.length > 20 && candidate.keyPattern.test(key)) {
+      return { provider: candidate.provider, modelId: modelEnv ?? candidate.defaultModel };
+    }
+  }
+  return null;
+}
+
+/**
+ * Short, body-free summary of a typing-generator error. Provider response
+ * bodies and JSON-ish blobs are stripped wholesale: warnings are serialized
+ * into result JSON and must never carry raw provider payloads.
+ */
+export function summarizeTypingError(error: unknown): string {
+  const e = error as { name?: unknown; message?: unknown; status?: unknown; statusCode?: unknown } | null;
+  const name = typeof e?.name === "string" && e.name.length > 0 ? e.name : "Error";
+  const status = typeof e?.status === "number" ? e.status : typeof e?.statusCode === "number" ? e.statusCode : null;
+  let message = String(e?.message ?? error ?? "unknown typing error");
+  message = message.replace(/ResponseBody[\s\S]*$/i, "");
+  const bodyStart = message.search(/[[{]/);
+  if (bodyStart >= 0) message = message.slice(0, bodyStart);
+  message = message.replace(/\s+/g, " ").trim();
+  const head = status !== null ? `${name} (HTTP ${status})` : name;
+  const out = message.length > 0 ? `${head}: ${message}` : head;
+  return out.slice(0, TYPING_WARNING_MESSAGE_MAX);
+}
+
+/**
+ * Classify a caught typing-generator failure. Anything that reached a
+ * provider (an AI SDK API call error, or a network-layer failure in the
+ * cause chain) is a provider failure: typing_generator_error. A failure that
+ * means the request could never be built from local configuration (bad URL,
+ * invalid options, schema rejection) is typing_configuration_error.
+ */
+export function classifyTypingFailure(error: unknown): TypingWarningCode {
+  const name = (error as { name?: unknown } | null)?.name;
+  // AI_RetryError only ever wraps retryable provider call failures.
+  if (name === "AI_APICallError" || name === "AI_RetryError") return "typing_generator_error";
+  const chain: string[] = [];
+  if (error instanceof Error) {
+    for (let e: unknown = error; e instanceof Error; e = (e as { cause?: unknown }).cause ?? null) {
+      chain.push(`${e.name} ${e.message}`);
+    }
+  } else {
+    chain.push(String(error));
+  }
+  const text = chain.join(" ");
+  if (/fetch failed|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|certificate|SSL|TLS|socket/i.test(text)) {
+    return "typing_generator_error";
+  }
+  return "typing_configuration_error";
+}

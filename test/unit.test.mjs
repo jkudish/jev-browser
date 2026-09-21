@@ -694,3 +694,301 @@ test("injected credential pages suppress the screenshot even before any fill", a
     await browser.close();
   }
 });
+
+// ── Typing selection and degradation records (src/lib.ts) ────────────────────
+import {
+  classifyTypingFailure,
+  resolveTypingSelection,
+  summarizeTypingError,
+  TYPING_WARNING_MESSAGE_MAX,
+  typingWarning,
+} from "../dist/lib.js";
+
+test("resolveTypingSelection auto-detects in candidate order (a stale openai key wins)", () => {
+  assert.equal(resolveTypingSelection({}), null);
+  const both = resolveTypingSelection({
+    OPENAI_API_KEY: "sk-openai-key-0123456789",
+    OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789",
+  });
+  assert.equal(both.provider, "openai"); // openai is first in detection order
+  assert.equal(both.modelId, "gpt-5.6-luna");
+  const or = resolveTypingSelection({ OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" });
+  assert.equal(or.provider, "openrouter");
+  assert.equal(or.modelId, "google/gemini-2.5-flash-lite"); // code default, not the stale README one
+  const google = resolveTypingSelection({ GEMINI_API_KEY: "AIza-google-key-0123456789" });
+  assert.equal(google.provider, "google");
+  assert.equal(google.modelId, "gemini-2.5-flash");
+  // malformed or too-short keys never auto-detect
+  assert.equal(resolveTypingSelection({ OPENAI_API_KEY: "sk-short" }), null);
+  assert.equal(resolveTypingSelection({ OPENROUTER_API_KEY: "not-an-or-key-01234567890" }), null);
+  // the model override passes through unchanged
+  assert.equal(
+    resolveTypingSelection({ OPENAI_API_KEY: "sk-openai-key-0123456789", JEV_BROWSER_TYPE_MODEL: "anthropic/claude-haiku-4.5" }).modelId,
+    "anthropic/claude-haiku-4.5",
+  );
+});
+
+test("resolveTypingSelection: BASE_URL selects a compatible endpoint; TYPE_PROVIDER runs through it", () => {
+  const custom = resolveTypingSelection({ JEV_BROWSER_TYPE_BASE_URL: "http://localhost:11434/v1", JEV_BROWSER_TYPE_MODEL: "qwen2.5:7b" });
+  assert.deepEqual(custom, { provider: "compatible-endpoint", modelId: "qwen2.5:7b", baseUrl: "http://localhost:11434/v1" });
+  const layered = resolveTypingSelection({
+    JEV_BROWSER_TYPE_PROVIDER: "openrouter",
+    OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789",
+    JEV_BROWSER_TYPE_BASE_URL: "http://127.0.0.1:1",
+  });
+  assert.equal(layered.provider, "openrouter");
+  assert.equal(layered.modelId, "google/gemini-2.5-flash-lite");
+  assert.equal(layered.baseUrl, "http://127.0.0.1:1");
+  // BASE_URL must at least be a valid absolute http(s) URL
+  assert.throws(() => resolveTypingSelection({ JEV_BROWSER_TYPE_BASE_URL: "not a url" }), /JEV_BROWSER_TYPE_BASE_URL/);
+  assert.throws(() => resolveTypingSelection({ JEV_BROWSER_TYPE_BASE_URL: "ftp://x/y" }), /http/);
+});
+
+test("resolveTypingSelection: JEV_BROWSER_TYPE_PROVIDER selects only that provider, or throws", () => {
+  const forced = resolveTypingSelection({
+    JEV_BROWSER_TYPE_PROVIDER: "openai",
+    OPENAI_API_KEY: "sk-openai-key-0123456789",
+    OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789",
+  });
+  assert.equal(forced.provider, "openai");
+  // unknown value
+  assert.throws(
+    () => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "bogus" }),
+    /JEV_BROWSER_TYPE_PROVIDER "bogus".*openai, openrouter, anthropic, google/,
+  );
+  // missing key for the selected provider
+  assert.throws(() => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "anthropic" }), /ANTHROPIC_API_KEY.*sk-ant-/);
+  // malformed key for the selected provider, even when another provider is fine
+  assert.throws(
+    () => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "openai", OPENAI_API_KEY: "sk-short", OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" }),
+    /OPENAI_API_KEY.*no other typing provider/,
+  );
+  // shape-valid length but wrong shape for the selected provider
+  assert.throws(
+    () => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "AIza-not-an-anthropic-key-012345" }),
+    /sk-ant-/,
+  );
+  // google accepts either env var name
+  const gemini = resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "google", GEMINI_API_KEY: "AIza-google-key-0123456789" });
+  assert.equal(gemini.provider, "google");
+});
+
+test("typingWarning shape: exact keys, optional fields absent, message capped", () => {
+  const minimal = typingWarning("typing_generator_error", 3, {
+    message: "x".repeat(500),
+    provider: "openrouter",
+    model: "google/gemini-2.5-flash-lite",
+  });
+  assert.deepEqual(Object.keys(minimal), ["code", "step", "message", "provider", "model"]);
+  assert.equal(minimal.message.length, TYPING_WARNING_MESSAGE_MAX);
+  assert.equal(TYPING_WARNING_MESSAGE_MAX, 200);
+  const full = typingWarning("typing_generator_empty", 2, {
+    message: "m",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    finishReason: "length",
+    fallback: "keyword-heuristic",
+  });
+  assert.deepEqual(Object.keys(full), ["code", "step", "message", "provider", "model", "finish_reason", "fallback"]);
+  assert.equal(full.finish_reason, "length");
+  assert.equal(full.fallback, "keyword-heuristic");
+  const none = typingWarning("typing_fallback_no_provider", 1, { message: "m", provider: null, model: null });
+  assert.equal(none.provider, null);
+  assert.equal(none.model, null);
+  assert.ok(!("finish_reason" in none) && !("fallback" in none));
+});
+
+test("summarizeTypingError: short, no response bodies, status carried", () => {
+  const out = summarizeTypingError({
+    name: "AI_APICallError",
+    statusCode: 401,
+    message: '401 Unauthorized: {"error":{"message":"Invalid API key sk-or-abc","code":401}}',
+  });
+  assert.match(out, /AI_APICallError \(HTTP 401\)/);
+  assert.ok(!out.includes("Invalid API key"), "provider error body text must not survive summarization");
+  assert.ok(!out.includes("{"));
+  const withBodySection = summarizeTypingError(new Error("POST failed. ResponseBody: first line\nsecond line with internals"));
+  assert.ok(!withBodySection.includes("internals"));
+  assert.ok(!withBodySection.includes("ResponseBody"));
+  const long = summarizeTypingError(new Error("E".repeat(1000)));
+  assert.ok(long.length <= TYPING_WARNING_MESSAGE_MAX);
+  const network = summarizeTypingError(Object.assign(new Error("Cannot connect to API: connect ECONNREFUSED 127.0.0.1:1"), { name: "AI_APICallError" }));
+  assert.match(network, /ECONNREFUSED/);
+});
+
+test("classifyTypingFailure separates provider failures from local configuration errors", () => {
+  assert.equal(
+    classifyTypingFailure(Object.assign(new Error("Cannot connect to API: connect ECONNREFUSED 127.0.0.1:1"), { name: "AI_APICallError" })),
+    "typing_generator_error",
+  );
+  const fetchFailed = new TypeError("fetch failed");
+  fetchFailed.cause = new Error("connect ECONNREFUSED 127.0.0.1:1");
+  assert.equal(classifyTypingFailure(fetchFailed), "typing_generator_error");
+  // retried provider failures are wrapped by the SDK in AI_RetryError
+  assert.equal(
+    classifyTypingFailure(Object.assign(new Error("Failed after 3 attempts. Last error: AI_APICallError: 500 Internal Server Error"), { name: "AI_RetryError" })),
+    "typing_generator_error",
+  );
+  assert.equal(classifyTypingFailure(new TypeError("Failed to parse URL from http://[")), "typing_configuration_error");
+  assert.equal(classifyTypingFailure(Object.assign(new Error("Invalid provider options"), { name: "AI_TypeValidationError" })), "typing_configuration_error");
+});
+
+// ── Typing generator execution (dist/navigate.js, network patched out) ───────
+import { createTypingGenerator, generateTextToType } from "../dist/navigate.js";
+
+function chatCompletion(content, finishReason = "stop") {
+  return new Response(
+    JSON.stringify({
+      id: "chatcmpl-test",
+      object: "chat.completion",
+      created: 0,
+      model: "test",
+      choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: finishReason }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+test("generateTextToType: openrouter requests disabled reasoning and the raised budget", async () => {
+  const realFetch = globalThis.fetch;
+  let seen;
+  globalThis.fetch = async (url, init) => {
+    seen = { url: String(url), body: JSON.parse(init.body) };
+    return chatCompletion("ristretto");
+  };
+  try {
+    const generator = createTypingGenerator({ OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" });
+    assert.equal(generator.provider, "openrouter");
+    assert.equal(generator.modelId, "google/gemini-2.5-flash-lite");
+    const out = await generateTextToType(new AbortController().signal, generator, "task", "the search box", "https://x.test/");
+    assert.deepEqual(out, { ok: true, text: "ristretto", via: "openrouter" });
+    assert.match(seen.url, /openrouter\.ai\/api\/v1\/chat\/completions/);
+    assert.deepEqual(seen.body.reasoning, { enabled: false }); // the body-level guard against empty reasoning output
+    assert.equal(seen.body.max_tokens, 256);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("generateTextToType: other providers keep the tight cap and send no reasoning flag", async () => {
+  const realFetch = globalThis.fetch;
+  let body;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(init.body);
+    return chatCompletion('"quoted"');
+  };
+  try {
+    // chat-completions round trip via the compatible endpoint (the openai
+    // provider speaks the Responses API, whose response shape this fake does
+    // not model; its request body is asserted separately below)
+    const generator = createTypingGenerator({ JEV_BROWSER_TYPE_BASE_URL: "http://typing.test/v1", JEV_BROWSER_TYPE_MODEL: "local-model" });
+    const out = await generateTextToType(new AbortController().signal, generator, "task", "the field", "https://x.test/");
+    assert.deepEqual(out, { ok: true, text: "quoted", via: "compatible-endpoint" }); // surrounding quotes are stripped
+    assert.equal(body.model, "local-model");
+    assert.equal(body.reasoning, undefined); // the openrouter namespace is meaningless here
+    assert.equal(body.max_tokens, 48);
+
+    // openai path: request-only assertions
+    const openai = createTypingGenerator({ OPENAI_API_KEY: "sk-openai-key-0123456789" });
+    await generateTextToType(new AbortController().signal, openai, "task", "the field", "https://x.test/").catch(() => {});
+    assert.equal(body.reasoning, undefined);
+    assert.equal(body.max_output_tokens, 48); // Responses API parameter name
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("generateTextToType: empty generations and API failures come back as typed codes", async () => {
+  const realFetch = globalThis.fetch;
+  const generator = createTypingGenerator({ OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" });
+  try {
+    globalThis.fetch = async () => chatCompletion("", "length");
+    let out = await generateTextToType(new AbortController().signal, generator, "task", "the field", "https://x.test/");
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "typing_generator_empty");
+    assert.equal(out.finishReason, "length");
+    assert.match(out.message, /finish reason: length/);
+
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: { message: "no such model", code: 404 } }), { status: 404, headers: { "content-type": "application/json" } });
+    out = await generateTextToType(new AbortController().signal, generator, "task", "the field", "https://x.test/");
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "typing_generator_error");
+    assert.ok(out.message.length <= TYPING_WARNING_MESSAGE_MAX);
+    assert.ok(!out.message.includes("{"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("generateTextToType: deadline aborts propagate instead of degrading", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => chatCompletion("never");
+  try {
+    const generator = createTypingGenerator({ OPENAI_API_KEY: "sk-openai-key-0123456789" });
+    const controller = new AbortController();
+    controller.abort(new Error("deadline-exceeded"));
+    await assert.rejects(() => generateTextToType(controller.signal, generator, "task", "the field", "https://x.test/"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("generateTextToType: BASE_URL routes every named provider to the configured endpoint", async () => {
+  const realFetch = globalThis.fetch;
+  const seenUrls = [];
+  globalThis.fetch = async (url) => {
+    seenUrls.push(String(url));
+    return chatCompletion("x");
+  };
+  try {
+    const cases = [
+      ["openai", { OPENAI_API_KEY: "sk-openai-key-0123456789" }],
+      ["anthropic", { ANTHROPIC_API_KEY: "sk-ant-anthropic-key-0123456789" }],
+      ["google", { GEMINI_API_KEY: "AIza-google-key-0123456789" }],
+    ];
+    for (const [provider, key] of cases) {
+      const generator = createTypingGenerator({
+        JEV_BROWSER_TYPE_PROVIDER: provider,
+        JEV_BROWSER_TYPE_BASE_URL: "http://proxy.internal/api",
+        ...key,
+      });
+      assert.equal(generator.provider, provider);
+      await generateTextToType(new AbortController().signal, generator, "task", "the field", "https://x.test/").catch(() => {});
+      assert.ok(
+        seenUrls.some((u) => u.startsWith("http://proxy.internal/api")),
+        `${provider} did not use the configured base URL (seen: ${seenUrls.join(", ")})`,
+      );
+      seenUrls.length = 0;
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("generateTextToType: the google provider generates without a compatibility cast", async () => {
+  const realFetch = globalThis.fetch;
+  let seen;
+  globalThis.fetch = async (url, init) => {
+    seen = { url: String(url), body: JSON.parse(init.body) };
+    return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: "ristretto" }] }, finishReason: "STOP" }] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  try {
+    const generator = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789" });
+    assert.equal(generator.provider, "google");
+    const out = await generateTextToType(new AbortController().signal, generator, "task", "the search box", "https://x.test/");
+    assert.deepEqual(out, { ok: true, text: "ristretto", via: "google" });
+    assert.match(seen.url, /generativelanguage\.googleapis\.com/);
+    assert.equal(seen.body.generationConfig.maxOutputTokens, 48); // tight cap, no openrouter options
+    // google models reasoning controls via generationConfig.thinkingConfig; the
+    // openrouter reasoning namespace must not leak into any google request
+    assert.equal(seen.body.generationConfig.thinkingConfig, undefined);
+    assert.equal(seen.body.generationConfig.reasoning, undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

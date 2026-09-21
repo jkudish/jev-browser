@@ -131,12 +131,22 @@ export async function runCli(argv: string[]): Promise<number> {
     }
   }
   try {
-    const result = (await navigate({
-      ...navigateArgs,
-      screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
-      recordDir,
-      password,
-    })) as Record<string, any>;
+    let result: Record<string, any>;
+    try {
+      result = (await navigate({
+        ...navigateArgs,
+        screenshot: screenshotPath ? "final" : (args.screenshot ?? "final"),
+        recordDir,
+        password,
+      })) as Record<string, any>;
+    } catch (error) {
+      // Configuration refusals (typing provider, credential guards) surface as
+      // one stderr line and exit code 2, never a stack trace. The return
+      // still passes through the outer finally, so scratch recording
+      // directories are cleaned up on this path too.
+      console.error(`navigate: ${(error as Error).message}`);
+      return 2;
+    }
     if (recordPath?.endsWith(".webm") && result.video_path) {
       const fs = await import("node:fs/promises");
       // Playwright can flush the video for a moment after close; wait for the
@@ -160,6 +170,13 @@ export async function runCli(argv: string[]): Promise<number> {
     }
     // The CLI prints JSON; base64 screenshots belong in files, not terminals.
     delete result.screenshot_base64_jpeg;
+
+    // Degradation never changes the exit code when a fallback completed; it
+    // gets exactly one concise stderr line, everything else lives in the JSON.
+    if (result.degraded && Array.isArray(result.warnings) && result.warnings.length > 0) {
+      const first = result.warnings[0];
+      console.error(`jev-browser: degraded typing, ${result.warnings.length} warning(s), first ${first.code} at step ${first.step}; see "warnings" in the result JSON`);
+    }
 
     console.log(JSON.stringify(result, null, 2));
     return result.status === "error" ? 1 : 0;

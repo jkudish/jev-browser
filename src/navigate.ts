@@ -14,11 +14,18 @@ import * as gfm from "turndown-plugin-gfm";
 import {
   buildActionSpace,
   buildCriteria,
+  classifyTypingFailure,
   heuristicQuery,
   pickAlternate,
   PRICE_PER_MTOK_IN,
   RawElement,
+  resolveTypingSelection,
   selectorFor,
+  summarizeTypingError,
+  TypingSelection,
+  TypingWarning,
+  TypingWarningCode,
+  typingWarning,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
 import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
@@ -118,96 +125,107 @@ async function askJev(budget: RunBudget, state: unknown, questions: Record<strin
 }
 
 // ── Typing generator: provider-agnostic via the Vercel AI SDK ────────────────
-function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["model"]; label: string } | null {
-  const providerEnv = process.env.JEV_BROWSER_TYPE_PROVIDER;
-  const modelEnv = process.env.JEV_BROWSER_TYPE_MODEL;
-
-  // An explicit OpenAI-compatible endpoint wins: Ollama, LM Studio, vLLM, proxies.
-  const baseUrl = process.env.JEV_BROWSER_TYPE_BASE_URL;
-  if (baseUrl) {
-    const provider = createOpenAICompatible({
-      name: "custom",
-      baseURL: baseUrl,
-      apiKey: process.env.JEV_BROWSER_TYPE_API_KEY ?? "",
-    });
-    return { model: provider(modelEnv ?? "gpt-5.6-luna"), label: "compatible-endpoint" };
-  }
-
-  const candidates: Array<{ provider: string; test: RegExp; make: (m: string) => any; defaultModel: string }> = [
-    {
-      provider: "openai",
-      test: /^sk-/,
-      make: (m) => createOpenAI({ apiKey: process.env.OPENAI_API_KEY! })(m),
-      defaultModel: "gpt-5.6-luna",
-    },
-    {
-      provider: "openrouter",
-      test: /^sk-or-/,
-      make: (m) =>
-        createOpenAICompatible({
-          name: "openrouter",
-          baseURL: "https://openrouter.ai/api/v1",
-          apiKey: process.env.OPENROUTER_API_KEY!,
-        })(m),
-      defaultModel: "google/gemini-2.5-flash-lite",
-    },
-    {
-      provider: "anthropic",
-      test: /^sk-ant-/,
-      make: (m) => createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(m),
-      defaultModel: "claude-haiku-4.5",
-    },
-    {
-      provider: "google",
-      test: /^AIza/,
-      make: (m) => createGoogleGenerativeAI({ apiKey: (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY)! })(m),
-      defaultModel: "gemini-2.5-flash",
-    },
-  ];
-
-  // Explicit provider first, then auto-detection by key shape.
-  const ordered = providerEnv
-    ? [...candidates.filter((c) => c.provider === providerEnv), ...candidates.filter((c) => c.provider !== providerEnv)]
-    : candidates;
-
-  for (const candidate of ordered) {
-    const key =
-      candidate.provider === "openai"
-        ? (process.env.OPENAI_API_KEY ?? "")
-        : candidate.provider === "openrouter"
-          ? (process.env.OPENROUTER_API_KEY ?? "")
-          : candidate.provider === "anthropic"
-            ? (process.env.ANTHROPIC_API_KEY ?? "")
-            : (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY ?? "");
-    if (key.length > 20 && candidate.test.test(key)) {
-      return { model: candidate.make(modelEnv ?? candidate.defaultModel), label: candidate.provider };
-    }
-  }
-  return null;
+export interface TypingGenerator {
+  provider: string; // label reported in results and step details
+  modelId: string;
+  model: Parameters<typeof generateText>[0]["model"];
 }
 
-async function generateTextToType(
-  budget: RunBudget,
+/**
+ * Build the typing generator for a run. Selection logic (including the
+ * strict JEV_BROWSER_TYPE_PROVIDER contract) lives in resolveTypingSelection;
+ * this only wires the selected configuration to a provider client. Returns
+ * null when no typing provider is configured.
+ */
+export function createTypingGenerator(env: NodeJS.ProcessEnv = process.env): TypingGenerator | null {
+  const selection: TypingSelection | null = resolveTypingSelection(env);
+  if (!selection) return null;
+  switch (selection.provider) {
+    case "openai":
+      return {
+        provider: "openai",
+        modelId: selection.modelId,
+        model: createOpenAI({ apiKey: env.OPENAI_API_KEY!, ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}) })(selection.modelId),
+      };
+    case "openrouter": {
+      const provider = createOpenAICompatible({
+        name: "openrouter",
+        baseURL: selection.baseUrl ?? "https://openrouter.ai/api/v1",
+        apiKey: env.OPENROUTER_API_KEY!,
+      });
+      return { provider: "openrouter", modelId: selection.modelId, model: provider(selection.modelId) };
+    }
+    case "anthropic":
+      return {
+        provider: "anthropic",
+        modelId: selection.modelId,
+        model: createAnthropic({ apiKey: env.ANTHROPIC_API_KEY!, ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}) })(selection.modelId),
+      };
+    case "google":
+      return {
+        provider: "google",
+        modelId: selection.modelId,
+        // @ai-sdk/google@2 speaks model spec v2, matching the ai@7 core; no
+        // compatibility cast is needed or wanted here.
+        model: createGoogleGenerativeAI({
+          apiKey: (env.GOOGLE_GENERATIVE_AI_API_KEY ?? env.GEMINI_API_KEY)!,
+          ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}),
+        })(selection.modelId),
+      };
+    default: {
+      const provider = createOpenAICompatible({
+        name: "custom",
+        baseURL: selection.baseUrl!,
+        apiKey: env.JEV_BROWSER_TYPE_API_KEY ?? "",
+      });
+      return { provider: "compatible-endpoint", modelId: selection.modelId, model: provider(selection.modelId) };
+    }
+  }
+}
+
+export type TypingTextResult =
+  | { ok: true; text: string; via: string }
+  | { ok: false; code: TypingWarningCode; message: string; finishReason?: string };
+
+/**
+ * Generate the text for one type/search action. Never falls back to the
+ * keyword heuristic itself: the caller decides what a failure means (ordinary
+ * fields type nothing; search fields take the heuristic) and records the
+ * structured warning.
+ */
+export async function generateTextToType(
+  signal: AbortSignal,
+  generator: TypingGenerator,
   task: string,
   elementDescription: string,
   url: string,
-): Promise<{ text: string; via: string }> {
-  const generator = resolveGeneratorModel();
-  if (!generator) return { text: heuristicQuery(task), via: "keyword-heuristic" };
+): Promise<TypingTextResult> {
+  // OpenRouter reasoning models can burn the whole budget on hidden reasoning
+  // tokens and return an empty message, so reasoning is disabled there and
+  // the output budget raised; other providers keep the tight cap.
+  const openrouter = generator.provider === "openrouter";
   try {
-    const { text } = await generateText({
+    const { text, finishReason } = await generateText({
       model: generator.model,
       prompt: `A browser agent is performing this task: "${task}". It must type into the ${elementDescription} on ${url}. Reply with ONLY the exact text to type (for a search box: a short search query; no quotes, no explanation).`,
-      maxOutputTokens: 48,
-      abortSignal: budget.signal,
+      ...(openrouter
+        ? { maxOutputTokens: 256, providerOptions: { openrouter: { reasoning: { enabled: false } } } }
+        : { maxOutputTokens: 48 }),
+      abortSignal: signal,
     });
     const cleaned = text.trim().replace(/^["']|["']$/g, "");
-    if (cleaned.length === 0) throw new Error("empty generation");
-    return { text: cleaned, via: generator.label };
+    if (cleaned.length === 0) {
+      return {
+        ok: false,
+        code: "typing_generator_empty",
+        message: `typing model returned no text${finishReason ? ` (finish reason: ${finishReason})` : ""}`,
+        finishReason: finishReason ?? undefined,
+      };
+    }
+    return { ok: true, text: cleaned, via: generator.provider };
   } catch (error) {
-    if (budget.signal.aborted) throw error; // deadline/cancellation propagates
-    // A bad model id or provider outage must not kill the task; degrade and say so.
-    return { text: heuristicQuery(task), via: "keyword-heuristic-after-generator-error" };
+    if (signal.aborted) throw error; // deadline/cancellation propagates
+    return { ok: false, code: classifyTypingFailure(error), message: summarizeTypingError(error) };
   }
 }
 
@@ -439,6 +457,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // sees it, so "the model never sees the value" holds unconditionally.
   const safeTask = R(task);
 
+  // Strict typing-provider configuration is validated before any timer,
+  // listener, or browser is armed, like the credential guards above: a run
+  // with JEV_BROWSER_TYPE_PROVIDER set to an unknown provider (or without a
+  // valid key for the named one) refuses to start instead of silently using
+  // another provider. Runs with typing disabled ignore typing config at all,
+  // so a broken config can always be worked around with allowTyping: false.
+  const typingGenerator = allowTyping ? createTypingGenerator() : null;
+
   // One abort source per run: the wall-clock deadline, optionally composed
   // with caller cancellation (the MCP layer forwards its signal).
   const controller = new AbortController();
@@ -473,6 +499,23 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const excerptCap = redactor ? STATE_EXCERPT_CHARS + maxVariant : STATE_EXCERPT_CHARS;
 
   const steps: StepRecord[] = [];
+  const warnings: TypingWarning[] = [];
+  const recordTypingWarning = (
+    step: number,
+    code: TypingWarningCode,
+    message: string,
+    extra: { finishReason?: string; fallback?: string } = {},
+  ) => {
+    warnings.push(
+      typingWarning(code, step, {
+        message: R(message),
+        provider: typingGenerator?.provider ?? null,
+        model: typingGenerator?.modelId ?? null,
+        finishReason: extra.finishReason,
+        fallback: extra.fallback,
+      }),
+    );
+  };
   const consoleEvents: ConsoleEvent[] = [];
   let consoleDropped = 0;
   const currentStep = { n: 0 };
@@ -678,22 +721,54 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         } else if (chosen.startsWith("type_")) {
           if (!allowTyping) {
             actionError = "typing disabled by caller";
+          } else if (!typingGenerator) {
+            // An ordinary field is never filled with a guess: no typing
+            // provider means nothing gets typed, loudly.
+            actionError = "typing generator failed; nothing was typed";
+            recordTypingWarning(step, "typing_fallback_no_provider", "no typing provider is configured; ordinary fields are left empty rather than filled with a guess");
           } else {
-            const generated = await generateTextToType(budget, safeTask, element.description, R(page.url()));
-            // Fill only: submitting is a separate submit_eN decision, so an
-            // ordinary form is never submitted mid-task by a field fill.
-            await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
-            detail = `typed "${generated.text}" via ${generated.via}`;
-            typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+            const generated = await generateTextToType(budget.signal, typingGenerator, safeTask, element.description, R(page.url()));
+            if (!generated.ok) {
+              // A failed or empty generation types nothing: keyword soup in a
+              // username or email field guarantees failure while looking like
+              // a typing attempt happened (#2).
+              actionError = "typing generator failed; nothing was typed";
+              recordTypingWarning(step, generated.code, generated.message, { finishReason: generated.finishReason });
+            } else {
+              // Fill only: submitting is a separate submit_eN decision, so an
+              // ordinary form is never submitted mid-task by a field fill.
+              await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+              detail = `typed "${generated.text}" via ${generated.via}`;
+              typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+            }
           }
         } else if (chosen.startsWith("search_")) {
           if (!allowTyping) {
             actionError = "typing disabled by caller";
           } else {
-            const generated = await generateTextToType(budget, safeTask, element.description, R(page.url()));
-            await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+            let text: string;
+            let via: string;
+            if (!typingGenerator) {
+              text = heuristicQuery(safeTask);
+              via = "keyword-heuristic";
+              recordTypingWarning(step, "typing_fallback_no_provider", "no typing provider is configured; search fields fall back to the task-keyword heuristic", { fallback: "keyword-heuristic" });
+            } else {
+              const generated = await generateTextToType(budget.signal, typingGenerator, safeTask, element.description, R(page.url()));
+              if (generated.ok) {
+                text = generated.text;
+                via = generated.via;
+              } else {
+                // Search fields keep the heuristic: it is search-tuned, and a
+                // search query built from the task words is often still
+                // useful. The run is marked degraded either way.
+                text = heuristicQuery(safeTask);
+                via = "keyword-heuristic-after-generator-error";
+                recordTypingWarning(step, generated.code, generated.message, { finishReason: generated.finishReason, fallback: "keyword-heuristic" });
+              }
+            }
+            await page.fill(selectorFor(element), text, { timeout: bounded(4_000) });
             await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
-            detail = `searched "${generated.text}" via ${generated.via}`;
+            detail = `searched "${text}" via ${via}`;
             typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
           }
         } else if (chosen.startsWith("submit_")) {
@@ -866,6 +941,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       elapsed_ms: Math.round(performance.now() - started),
       model: budget.model,
       jev_provider: budget.provider,
+      degraded: warnings.length > 0,
+      warnings,
+      typing_provider: typingGenerator?.provider ?? null,
+      typing_model: typingGenerator?.modelId ?? null,
       password_filled: passwordFilled || undefined,
       screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
@@ -888,6 +967,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       elapsed_ms: Math.round(performance.now() - started),
       model: budget.model,
       jev_provider: budget.provider,
+      degraded: warnings.length > 0,
+      warnings,
+      typing_provider: typingGenerator?.provider ?? null,
+      typing_model: typingGenerator?.modelId ?? null,
     };
     return redactor ? redactor.redactDeep(failure) : failure;
   } finally {
