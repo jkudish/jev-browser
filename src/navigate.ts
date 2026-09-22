@@ -3,7 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -14,22 +14,36 @@ import * as gfm from "turndown-plugin-gfm";
 import {
   buildActionSpace,
   buildCriteria,
+  classifyTypingFailure,
   heuristicQuery,
   pickAlternate,
   PRICE_PER_MTOK_IN,
   RawElement,
   resolveCookies,
+  resolveTypingSelection,
   SeedCookie,
   selectorFor,
+  summarizeTypingError,
+  TypingSelection,
+  TypingWarning,
+  TypingWarningCode,
+  typingWarning,
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
+import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
+// Display limits on credential runs: what model-facing strings may show.
+// Capture windows are these plus the longest secret representation.
+const CREDENTIAL_VISIBLE = { label: 80, option: 120, href: 120 };
 
 export interface NavigateOptions {
   task: string;
-  startUrl: string;
+  /** Start URL for an internally-created page. Omit when `page` is supplied. */
+  startUrl?: string;
+  /** Reuse an existing Playwright page instead of launching a new browser. */
+  page?: Page;
   maxSteps?: number;
   maxSeconds?: number;
   allowTyping?: boolean;
@@ -37,9 +51,19 @@ export interface NavigateOptions {
   maxChars?: number;
   screenshot?: "final" | "none";
   recordDir?: string;
-  /** Cookies added to the context before the first navigation, so a run can
-   *  start behind a login the agent cannot perform itself (password fields
-   *  are never typed into). Domain defaults to the start URL's host. */
+  password?: { value: string; origin: string };
+  /**
+   * Seed cookies added to the run's own browser context before the first
+   * navigation, so a run can start behind a login the agent cannot perform
+   * itself (password fields are never typed into). Values are secrets of the
+   * same rank as the password and are redacted from every state, trace,
+   * error, payload, and result this function produces; recording is refused
+   * and the final screenshot is suppressed from run start (the page can
+   * reflect a cookie value into pixels on the very first load). Refused on
+   * runs with an injected page: addCookies would mutate a caller-owned
+   * context. Never source values from anything model-composed (the CLI and
+   * MCP adapters take file or environment references, never values).
+   */
   cookies?: SeedCookie[];
 }
 
@@ -108,103 +132,128 @@ async function askJev(budget: RunBudget, state: unknown, questions: Record<strin
 }
 
 // ── Typing generator: provider-agnostic via the Vercel AI SDK ────────────────
-function resolveGeneratorModel(): { model: Parameters<typeof generateText>[0]["model"]; label: string } | null {
-  const providerEnv = process.env.JEV_BROWSER_TYPE_PROVIDER;
-  const modelEnv = process.env.JEV_BROWSER_TYPE_MODEL;
-
-  // An explicit OpenAI-compatible endpoint wins: Ollama, LM Studio, vLLM, proxies.
-  const baseUrl = process.env.JEV_BROWSER_TYPE_BASE_URL;
-  if (baseUrl) {
-    const provider = createOpenAICompatible({
-      name: "custom",
-      baseURL: baseUrl,
-      apiKey: process.env.JEV_BROWSER_TYPE_API_KEY ?? "",
-    });
-    return { model: provider(modelEnv ?? "gpt-5.6-luna"), label: "compatible-endpoint" };
-  }
-
-  const candidates: Array<{ provider: string; test: RegExp; make: (m: string) => any; defaultModel: string }> = [
-    {
-      provider: "openai",
-      test: /^sk-/,
-      make: (m) => createOpenAI({ apiKey: process.env.OPENAI_API_KEY! })(m),
-      defaultModel: "gpt-5.6-luna",
-    },
-    {
-      provider: "openrouter",
-      test: /^sk-or-/,
-      make: (m) =>
-        createOpenAICompatible({
-          name: "openrouter",
-          baseURL: "https://openrouter.ai/api/v1",
-          apiKey: process.env.OPENROUTER_API_KEY!,
-        })(m),
-      defaultModel: "google/gemini-2.5-flash-lite",
-    },
-    {
-      provider: "anthropic",
-      test: /^sk-ant-/,
-      make: (m) => createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(m),
-      defaultModel: "claude-haiku-4.5",
-    },
-    {
-      provider: "google",
-      test: /^AIza/,
-      make: (m) => createGoogleGenerativeAI({ apiKey: (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY)! })(m),
-      defaultModel: "gemini-2.5-flash",
-    },
-  ];
-
-  // Explicit provider first, then auto-detection by key shape.
-  const ordered = providerEnv
-    ? [...candidates.filter((c) => c.provider === providerEnv), ...candidates.filter((c) => c.provider !== providerEnv)]
-    : candidates;
-
-  for (const candidate of ordered) {
-    const key =
-      candidate.provider === "openai"
-        ? (process.env.OPENAI_API_KEY ?? "")
-        : candidate.provider === "openrouter"
-          ? (process.env.OPENROUTER_API_KEY ?? "")
-          : candidate.provider === "anthropic"
-            ? (process.env.ANTHROPIC_API_KEY ?? "")
-            : (process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY ?? "");
-    if (key.length > 20 && candidate.test.test(key)) {
-      return { model: candidate.make(modelEnv ?? candidate.defaultModel), label: candidate.provider };
-    }
-  }
-  return null;
+export interface TypingGenerator {
+  provider: string; // label reported in results and step details
+  modelId: string;
+  model: Parameters<typeof generateText>[0]["model"];
 }
 
-async function generateTextToType(
-  budget: RunBudget,
+/**
+ * Build the typing generator for a run. Selection logic (including the
+ * strict JEV_BROWSER_TYPE_PROVIDER contract) lives in resolveTypingSelection;
+ * this only wires the selected configuration to a provider client. Returns
+ * null when no typing provider is configured.
+ */
+export function createTypingGenerator(env: NodeJS.ProcessEnv = process.env): TypingGenerator | null {
+  const selection: TypingSelection | null = resolveTypingSelection(env);
+  if (!selection) return null;
+  switch (selection.provider) {
+    case "openai":
+      return {
+        provider: "openai",
+        modelId: selection.modelId,
+        model: createOpenAI({ apiKey: env.OPENAI_API_KEY!, ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}) })(selection.modelId),
+      };
+    case "openrouter": {
+      const provider = createOpenAICompatible({
+        name: "openrouter",
+        baseURL: selection.baseUrl ?? "https://openrouter.ai/api/v1",
+        apiKey: env.OPENROUTER_API_KEY!,
+      });
+      return { provider: "openrouter", modelId: selection.modelId, model: provider(selection.modelId) };
+    }
+    case "anthropic":
+      return {
+        provider: "anthropic",
+        modelId: selection.modelId,
+        model: createAnthropic({ apiKey: env.ANTHROPIC_API_KEY!, ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}) })(selection.modelId),
+      };
+    case "google":
+      return {
+        provider: "google",
+        modelId: selection.modelId,
+        // @ai-sdk/google@2 speaks model spec v2, matching the ai@7 core; no
+        // compatibility cast is needed or wanted here.
+        model: createGoogleGenerativeAI({
+          apiKey: (env.GOOGLE_GENERATIVE_AI_API_KEY ?? env.GEMINI_API_KEY)!,
+          ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}),
+        })(selection.modelId),
+      };
+    default: {
+      const provider = createOpenAICompatible({
+        name: "custom",
+        baseURL: selection.baseUrl!,
+        apiKey: env.JEV_BROWSER_TYPE_API_KEY ?? "",
+      });
+      return { provider: "compatible-endpoint", modelId: selection.modelId, model: provider(selection.modelId) };
+    }
+  }
+}
+
+export type TypingTextResult =
+  | { ok: true; text: string; via: string }
+  | { ok: false; code: TypingWarningCode; message: string; finishReason?: string };
+
+/**
+ * Generate the text for one type/search action. Never falls back to the
+ * keyword heuristic itself: the caller decides what a failure means (ordinary
+ * fields type nothing; search fields take the heuristic) and records the
+ * structured warning.
+ */
+export async function generateTextToType(
+  signal: AbortSignal,
+  generator: TypingGenerator,
   task: string,
   elementDescription: string,
   url: string,
-): Promise<{ text: string; via: string }> {
-  const generator = resolveGeneratorModel();
-  if (!generator) return { text: heuristicQuery(task), via: "keyword-heuristic" };
+): Promise<TypingTextResult> {
+  // OpenRouter reasoning models can burn the whole budget on hidden reasoning
+  // tokens and return an empty message, so reasoning is disabled there and
+  // the output budget raised; other providers keep the tight cap.
+  const openrouter = generator.provider === "openrouter";
   try {
-    const { text } = await generateText({
+    const { text, finishReason } = await generateText({
       model: generator.model,
       prompt: `A browser agent is performing this task: "${task}". It must type into the ${elementDescription} on ${url}. Reply with ONLY the exact text to type (for a search box: a short search query; no quotes, no explanation).`,
-      maxOutputTokens: 48,
-      abortSignal: budget.signal,
+      ...(openrouter
+        ? { maxOutputTokens: 256, providerOptions: { openrouter: { reasoning: { enabled: false } } } }
+        : { maxOutputTokens: 48 }),
+      abortSignal: signal,
     });
     const cleaned = text.trim().replace(/^["']|["']$/g, "");
-    if (cleaned.length === 0) throw new Error("empty generation");
-    return { text: cleaned, via: generator.label };
+    if (cleaned.length === 0) {
+      return {
+        ok: false,
+        code: "typing_generator_empty",
+        message: `typing model returned no text${finishReason ? ` (finish reason: ${finishReason})` : ""}`,
+        finishReason: finishReason ?? undefined,
+      };
+    }
+    return { ok: true, text: cleaned, via: generator.provider };
   } catch (error) {
-    if (budget.signal.aborted) throw error; // deadline/cancellation propagates
-    // A bad model id or provider outage must not kill the task; degrade and say so.
-    return { text: heuristicQuery(task), via: "keyword-heuristic-after-generator-error" };
+    if (signal.aborted) throw error; // deadline/cancellation propagates
+    return { ok: false, code: classifyTypingFailure(error), message: summarizeTypingError(error) };
   }
 }
 
 // ── Extraction: DOM-first (a11y trees under-report inputs) ───────────────────
-async function extractAndStamp(page: Page, bounded: (cap: number) => number): Promise<RawElement[]> {
+export interface CaptureCaps {
+  label: number;
+  option: number;
+  href: number;
+}
+// Non-credential defaults preserve the original extraction semantics exactly:
+// labels capped at 80 (the noise-name threshold), hrefs and option labels
+// uncapped in practice.
+const DEFAULT_CAPTURE_CAPS: CaptureCaps = { label: 80, option: 1_000_000, href: 1_000_000 };
+async function extractAndStamp(
+  page: Page,
+  bounded: (cap: number) => number,
+  caps: CaptureCaps = DEFAULT_CAPTURE_CAPS,
+  includePasswordInputs = false,
+): Promise<RawElement[]> {
   return page.evaluate(
-    () => {
+    ({ cap, includePw }: { cap: CaptureCaps; includePw: boolean }) => {
       // Clear stamps from previous steps first: elements that dropped out of
       // the candidate list keep their old data-jev-id, which would make
       // selectors match more than one element.
@@ -228,8 +277,8 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
         // associated native labels (label[for] and wrapping labels, all of
         // them, in tree order), then placeholder and title. Inputs are void
         // elements: innerText is always empty, so plain <label for> forms
-        // resolve here or not at all. Candidates are normalized so a blank
-        // aria-labelledby cannot suppress the rest of the chain.
+        // resolve here or not at all. Every candidate is normalized before the
+        // fallback chain so a blank attribute cannot suppress the rest of it.
         const norm = (s: string | null | undefined): string => (s ?? "").replace(/\s+/g, " ").trim();
         const labelledby = norm(
           (el.getAttribute("aria-labelledby") ?? "")
@@ -242,40 +291,81 @@ async function extractAndStamp(page: Page, bounded: (cap: number) => number): Pr
             .map((l) => l.textContent ?? "")
             .join(" "),
         );
+        // Search-like fields, by structure alone: input[type=search] or
+        // role=searchbox. No form-membership or label-text heuristics here:
+        // a plain text field that only looks like a search box is a real form
+        // field and must keep type + submit, not a one-action search.
+        const searchField = (tag === "input" && typeAttr === "search") || roleAttr === "searchbox";
+        // Submit controls: an explicit submission affordance. A <button> with
+        // no type attribute defaults to submit inside a form.
+        const submitControl =
+          (tag === "button" && (typeAttr === "submit" || (!el.hasAttribute("type") && el.closest("form") !== null))) ||
+          (tag === "input" && typeAttr === "submit");
+        // Submit button inputs carry their visible label in the value attribute
+        // (HTML-AAM: after ARIA and native labels, before title); with no value
+        // the browser supplies a default label, "Submit". Without this the
+        // control extracts as unlabeled noise and drops out of the action space.
+        // The UA-default label applies only when value is unspecified; an
+        // explicit empty value stays empty and falls through to title.
+        const valueAttr = el.getAttribute("value");
+        const valueLabel =
+          tag === "input" && typeAttr === "submit"
+            ? valueAttr ?? "Submit"
+            : tag === "input" && typeAttr === "button"
+              ? valueAttr ?? ""
+              : "";
         const label = norm(
           labelledby ||
-            el.getAttribute("aria-label") ||
+            norm(el.getAttribute("aria-label")) ||
             nativeLabels ||
-            el.getAttribute("placeholder") ||
-            el.getAttribute("title") ||
-            el.innerText ||
-            el.textContent ||
+            norm(valueLabel) ||
+            norm(el.getAttribute("placeholder")) ||
+            norm(el.getAttribute("title")) ||
+            norm(el.innerText) ||
+            norm(el.textContent) ||
             "",
         );
-        const href = tag === "a" ? el.getAttribute("href") || "" : "";
+        const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap.href) : "";
         const clickable =
           ["a", "button"].includes(tag) ||
           ["button", "link"].includes(roleAttr) ||
           ["submit", "button", "checkbox", "radio"].includes(typeAttr);
-        const typeable =
-          tag === "textarea" ||
-          (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
-          ["searchbox", "textbox"].includes(roleAttr);
+
         const selectable = tag === "select";
-        if (!clickable && !typeable && !selectable) continue;
+        // Password inputs are excluded from typeable by design, even when a
+        // role attribute would otherwise make them typeable; they are stamped
+        // separately so credential runs can offer fill_password. Without a
+        // password source they are skipped entirely, before stamping: they
+        // never consume the candidate budget on ordinary runs.
+        const passwordInput = tag === "input" && typeAttr === "password";
+        if (passwordInput && !includePw) continue;
+        const typeable =
+          !passwordInput &&
+          (tag === "textarea" ||
+            (tag === "input" && !["submit", "button", "checkbox", "radio", "file", "hidden", "range", "password"].includes(typeAttr)) ||
+            ["searchbox", "textbox"].includes(roleAttr));
+        // Enter submits from single-line fields (implicit form submission, or
+        // the site's own Enter handler); a textarea Enter is just a newline.
+        const enterSubmittable = typeable && tag !== "textarea";
+        if (!clickable && !typeable && !selectable && !(passwordInput && includePw)) continue;
         const attr = `j${out.length + 1}`;
         el.setAttribute("data-jev-id", attr);
         const options =
           tag === "select"
             ? Array.from((el as unknown as HTMLSelectElement).options)
-                .map((o) => (o.label || o.value || "").trim())
-                .filter(Boolean)
+                // Keep each option's live DOM index alongside its label:
+                // selection happens by index, so a scrubbed or truncated
+                // label can never become the selection key.
+                .map((o, i) => ({ i, label: (o.label || o.value || "").trim().slice(0, cap.option) }))
+                .filter((o) => o.label.length > 0)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, 80), href, typeAttr, clickable, typeable, selectable, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, searchField, submitControl, enterSubmittable, selectable, passwordInput: passwordInput || undefined, options });
       }
       return out;
-    });
+    },
+    { cap: caps, includePw: includePasswordInputs },
+  );
 }
 
 interface Observables {
@@ -286,15 +376,15 @@ interface Observables {
   excerpt: string;
 }
 
-async function pageObservables(page: Page, bounded: (cap: number) => number): Promise<Observables> {
+async function pageObservables(page: Page, bounded: (cap: number) => number, excerptCap = 1500): Promise<Observables> {
   const url = page.url();
   const title = await page.title().catch(() => "");
   const data = await page
-    .evaluate(() => ({
+    .evaluate((cap: number) => ({
       length: document.body?.innerText?.length ?? 0,
       scrollY: window.scrollY,
-      excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 1500),
-    }))
+      excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, cap),
+    }), excerptCap)
     .catch(() => ({ length: 0, scrollY: 0, excerpt: "" }));
   return { url, title, textLength: data.length, scrollY: data.scrollY, excerpt: data.excerpt };
 }
@@ -336,6 +426,75 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const started = performance.now();
   const deadlineAt = started + maxSeconds * 1000;
 
+  // Credential-run guards run before any timer, listener, or browser is
+  // armed: a rejected direct-library call must not leak the deadline timer
+  // (or the caller's abort listener) for maxSeconds.
+  // Injected-page guards share the pre-timer region: a rejected call must not
+  // leak the deadline timer or the caller's abort listener either.
+  if (options.page && options.recordDir) {
+    throw new Error("navigate(): video recording is refused on runs with an injected page");
+  }
+  if (!options.page && !startUrl) {
+    throw new Error("startUrl is required when page is not supplied");
+  }
+  // Seed cookies are credentials of the same rank as the password value, so
+  // their guards share the pre-timer region: a rejected call must not arm
+  // the deadline timer or any listener. addCookies on a caller-owned context
+  // would silently rewrite the caller's own session state, so cookies plus
+  // an injected page is refused before anything is touched.
+  let seedCookies: ReturnType<typeof resolveCookies> = [];
+  if (options.cookies?.length) {
+    if (options.page) {
+      throw new Error("navigate(): seed cookies are refused on runs with an injected page (context.addCookies would mutate the caller's context)");
+    }
+    seedCookies = resolveCookies(options.cookies, startUrl!);
+    // Video frames cannot be redacted; a seeded cookie can render into them.
+    if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with seed cookies");
+    assertNoPlaywrightDebug();
+    // Same validation as the password: a value that could never be redacted
+    // reliably (empty, control characters, below the safe length) is
+    // rejected before the run starts.
+    for (const c of seedCookies) validateSecretBuffer(Buffer.from(c.value, "utf8"), `cookie "${c.name}"`);
+  }
+  let redactor: Redactor | null = null;
+  let trustedOrigin: string | null = null;
+  let passwordValue: string | null = null;
+  if (options.password) {
+    const origin = parseTrustedOrigin(options.password.origin);
+    if (!origin) {
+      throw new Error("navigate(): password.origin must be an exact https origin (http only on localhost), e.g. https://acme.com");
+    }
+    trustedOrigin = origin;
+    assertNoPlaywrightDebug();
+    if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with a password source");
+    // A caller context created with recordVideo (or page.video() non-null for
+    // any reason) records the injected page too, and video frames cannot be
+    // redacted, so credential runs refuse it exactly like recordDir.
+    if (options.page?.video()) throw new Error("navigate(): password runs are refused on an injected page that is being recorded");
+    // Validate here, not just in the CLI/MCP adapters: library callers call
+    // navigate() directly, and an invalid secret (CR/LF, below-minimum or
+    // normalization-collapsing length) could never be redacted reliably.
+    passwordValue = validateSecretBuffer(Buffer.from(options.password.value, "utf8"));
+  }
+  // One redactor covers every secret this run carries: the password value and
+  // each seed-cookie value. Longest-first application means a value that is a
+  // prefix of another (two cookies sharing a token prefix) still redacts.
+  const runSecrets = [passwordValue, ...seedCookies.map((c) => c.value)].filter((v): v is string => v !== null);
+  if (runSecrets.length) redactor = makeRedactor(runSecrets);
+  const R = (s: string): string => redactor?.redact(s) ?? s;
+  // The task itself is model-facing: if a caller ignored the docs and put the
+  // value in the task string, scrub it before any model or typing generator
+  // sees it, so "the model never sees the value" holds unconditionally.
+  const safeTask = R(task);
+
+  // Strict typing-provider configuration is validated before any timer,
+  // listener, or browser is armed, like the credential guards above: a run
+  // with JEV_BROWSER_TYPE_PROVIDER set to an unknown provider (or without a
+  // valid key for the named one) refuses to start instead of silently using
+  // another provider. Runs with typing disabled ignore typing config at all,
+  // so a broken config can always be worked around with allowTyping: false.
+  const typingGenerator = allowTyping ? createTypingGenerator() : null;
+
   // One abort source per run: the wall-clock deadline, optionally composed
   // with caller cancellation (the MCP layer forwards its signal).
   const controller = new AbortController();
@@ -358,13 +517,58 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const remaining = () => Math.max(0, deadlineAt - performance.now());
   const bounded = (cap: number) => Math.max(250, Math.min(cap, remaining() || 250));
 
+  // Credential runs size each capture window as visible limit + the longest
+  // secret representation, so an echo that starts inside the visible window
+  // is always captured whole: redaction sees the complete variant before any
+  // display slice, and no prefix of the value can survive the boundary.
+  // Non-credential runs keep the original extraction semantics.
+  const maxVariant = redactor?.maxVariantLength ?? 0;
+  const captureCaps = redactor
+    ? { label: CREDENTIAL_VISIBLE.label + maxVariant, option: CREDENTIAL_VISIBLE.option + maxVariant, href: CREDENTIAL_VISIBLE.href + maxVariant }
+    : DEFAULT_CAPTURE_CAPS;
+  const excerptCap = redactor ? STATE_EXCERPT_CHARS + maxVariant : STATE_EXCERPT_CHARS;
+
   const steps: StepRecord[] = [];
+  const warnings: TypingWarning[] = [];
+  const recordTypingWarning = (
+    step: number,
+    code: TypingWarningCode,
+    message: string,
+    extra: { finishReason?: string; fallback?: string } = {},
+  ) => {
+    warnings.push(
+      typingWarning(code, step, {
+        message: R(message),
+        provider: typingGenerator?.provider ?? null,
+        model: typingGenerator?.modelId ?? null,
+        finishReason: extra.finishReason,
+        fallback: extra.fallback,
+      }),
+    );
+  };
   const consoleEvents: ConsoleEvent[] = [];
   let consoleDropped = 0;
   const currentStep = { n: 0 };
   const extractionProblems: string[] = [];
+  // Set immediately before a fill is attempted: even a failed fill counts as
+  // exposed, so the final screenshot stays suppressed. passwordFilled is set
+  // only when a fill actually landed; a refused fill (wrong origin, element
+  // changed) must not report success.
+  // An injected page may already visibly contain or reflect the configured
+  // value before any fill: a caller-typed login field, a logged-in page that
+  // echoes it. Owned password runs cannot (the value only reaches the page
+  // through a fill), so exposure starts armed exactly for injected credential
+  // pages. Cookie runs are armed from run start on any page: the seeded
+  // values sit in the browser before the first navigation, so the very first
+  // rendered page can already reflect one into pixels.
+  let credentialUsed = Boolean(options.password && options.page) || seedCookies.length > 0;
+  let passwordFilled = false;
 
   let browser: Browser | null = null;
+  let ownsBrowser = false;
+  let observedContext: BrowserContext | null = null;
+  let onNewPage: ((page: Page) => void) | null = null;
+  const observerCleanups: Array<() => void> = [];
   let status = "error";
 
   const recordEvent = (event: Omit<ConsoleEvent, "step">) => {
@@ -376,44 +580,63 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   };
 
   const attachPageObservers = (p: Page) => {
-    p.on("console", (msg) => {
+    // Redaction happens on the full string before any cap: a truncated echo
+    // of the secret would otherwise survive the slice boundary.
+    const onConsole = (msg: ConsoleMessage) => {
       const type = msg.type();
       if (type !== "error" && type !== "warning") return;
-      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: msg.text().slice(0, 300), page: p.url().slice(0, 120) });
-    });
-    p.on("pageerror", (err) => recordEvent({ type: "page_error", text: String(err).slice(0, 300), page: p.url().slice(0, 120) }));
-    p.on("requestfailed", (req) =>
+      recordEvent({ type: `console_${type}` as ConsoleEvent["type"], text: R(msg.text()).slice(0, 300), page: R(p.url()).slice(0, 120) });
+    };
+    const onPageError = (err: Error) => recordEvent({ type: "page_error", text: R(String(err)).slice(0, 300), page: R(p.url()).slice(0, 120) });
+    const onRequestFailed = (req: Request) =>
       recordEvent({
         type: "request_failed",
-        text: `${req.method()} ${req.url().slice(0, 200)} ${req.failure()?.errorText ?? ""}`.slice(0, 300),
-        page: p.url().slice(0, 120),
-      }),
-    );
+        text: R(`${req.method()} ${req.url()} ${req.failure()?.errorText ?? ""}`).slice(0, 300),
+        page: R(p.url()).slice(0, 120),
+      });
+    p.on("console", onConsole);
+    p.on("pageerror", onPageError);
+    p.on("requestfailed", onRequestFailed);
+    observerCleanups.push(() => {
+      p.off("console", onConsole);
+      p.off("pageerror", onPageError);
+      p.off("requestfailed", onRequestFailed);
+    });
   };
 
   try {
-    browser = await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
-    const context = await browser.newContext({
-      viewport: { width: 1024, height: 640 },
-      ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
-    });
-    const seedCookies = resolveCookies(options.cookies, startUrl);
+    ownsBrowser = !options.page;
+    browser = options.page ? null : await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
+    const context: BrowserContext = options.page
+      ? options.page.context()
+      : await browser!.newContext({
+          viewport: { width: 1024, height: 640 },
+          ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
+        });
+    observedContext = context;
+    // Seeded before the first navigation (the guards already ran pre-timer;
+    // cookies + injected page and cookies + recording were both refused, so
+    // this only ever touches a run-owned context).
     if (seedCookies.length) await context.addCookies(seedCookies);
     // No Playwright default (30s) may ever outlive the run budget.
-    context.setDefaultTimeout(8_000);
-    let page = await context.newPage();
+    if (ownsBrowser) {
+      context.setDefaultTimeout(8_000);
+    }
+    let page = options.page ?? (await context.newPage());
     const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
     let pendingPage: Page | null = null;
-    context.on("page", (p) => {
+    onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
       pendingPage = p;
-    });
+    };
+    context.on("page", onNewPage);
 
-    await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+    if (startUrl) {
+      await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+    }
 
     let lastExecuted: string | null = null;
-    let lastOutcome: string | null = null;
     // Machine state for repeat recovery, decoupled from the display string:
     // "typed" (a fill happened but the page did not change) and "no_change"
     // (nothing observable happened) both make a repeat proposal redundant.
@@ -427,17 +650,33 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         break;
       }
 
-      const raw = await extractAndStamp(page, bounded);
-      const { elements, truncated } = buildActionSpace(raw);
-      const observables = await pageObservables(page, bounded);
+      const raw = await extractAndStamp(page, bounded, captureCaps, Boolean(options.password));
+      // A page that already holds the value can echo it into any extracted
+      // string (labels, hrefs, option text). Scrub host-side before the
+      // action space or any model-facing state is built from these. These
+      // strings were captured longer than the display limit on purpose (so
+      // echoes starting inside the window are captured whole); they go
+      // through the position-preserving path so the display slice can never
+      // pull a partially captured echo into view.
+      if (redactor) {
+        for (const el of raw) {
+          el.text = redactor.redactCapped(el.text, CREDENTIAL_VISIBLE.label);
+          el.href = redactor.redactCapped(el.href, CREDENTIAL_VISIBLE.href);
+          if (el.options) el.options = el.options.map((o) => ({ i: o.i, label: redactor.redactCapped(o.label, CREDENTIAL_VISIBLE.option) }));
+        }
+      }
+      const { elements, truncated } = buildActionSpace(raw, { passwordActive: allowTyping && Boolean(options.password) });
+      const observables = await pageObservables(page, bounded, excerptCap);
 
       // Empty action space is still judged normally: controls-only criteria
       // (scroll/back/done) plus the page excerpt. goal_done can and should
       // fire on terminal pages with no interactive elements.
       const state = {
-        task,
-        current_page: { url: observables.url, title: observables.title },
-        page_text_excerpt: observables.excerpt,
+        task: safeTask,
+        current_page: { url: R(observables.url), title: R(observables.title) },
+        page_text_excerpt: redactor
+          ? redactor.redactCapped(observables.excerpt, STATE_EXCERPT_CHARS)
+          : observables.excerpt.slice(0, STATE_EXCERPT_CHARS),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
         element_list_truncated: truncated,
         no_interactive_elements: elements.length === 0,
@@ -492,7 +731,13 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
 
       const element = elements.find(
-        (e) => chosen === `click_${e.id}` || chosen === `type_${e.id}` || chosen === `select_${e.id}`,
+        (e) =>
+          chosen === `click_${e.id}` ||
+          chosen === `type_${e.id}` ||
+          chosen === `select_${e.id}` ||
+          chosen === `submit_${e.id}` ||
+          chosen === `search_${e.id}` ||
+          chosen === `fill_password_${e.id}`,
       );
 
       let detail = chosen;
@@ -513,27 +758,123 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         } else if (chosen.startsWith("type_")) {
           if (!allowTyping) {
             actionError = "typing disabled by caller";
+          } else if (!typingGenerator) {
+            // An ordinary field is never filled with a guess: no typing
+            // provider means nothing gets typed, loudly.
+            actionError = "typing generator failed; nothing was typed";
+            recordTypingWarning(step, "typing_fallback_no_provider", "no typing provider is configured; ordinary fields are left empty rather than filled with a guess");
           } else {
-            const generated = await generateTextToType(budget, task, element.description, page.url());
-            await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+            const generated = await generateTextToType(budget.signal, typingGenerator, safeTask, element.description, R(page.url()));
+            if (!generated.ok) {
+              // A failed or empty generation types nothing: keyword soup in a
+              // username or email field guarantees failure while looking like
+              // a typing attempt happened (#2).
+              actionError = "typing generator failed; nothing was typed";
+              recordTypingWarning(step, generated.code, generated.message, { finishReason: generated.finishReason });
+            } else {
+              // Fill only: submitting is a separate submit_eN decision, so an
+              // ordinary form is never submitted mid-task by a field fill.
+              await page.fill(selectorFor(element), generated.text, { timeout: bounded(4_000) });
+              detail = `typed "${generated.text}" via ${generated.via}`;
+              typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+            }
+          }
+        } else if (chosen.startsWith("search_")) {
+          if (!allowTyping) {
+            actionError = "typing disabled by caller";
+          } else {
+            let text: string;
+            let via: string;
+            if (!typingGenerator) {
+              text = heuristicQuery(safeTask);
+              via = "keyword-heuristic";
+              recordTypingWarning(step, "typing_fallback_no_provider", "no typing provider is configured; search fields fall back to the task-keyword heuristic", { fallback: "keyword-heuristic" });
+            } else {
+              const generated = await generateTextToType(budget.signal, typingGenerator, safeTask, element.description, R(page.url()));
+              if (generated.ok) {
+                text = generated.text;
+                via = generated.via;
+              } else {
+                // Search fields keep the heuristic: it is search-tuned, and a
+                // search query built from the task words is often still
+                // useful. The run is marked degraded either way.
+                text = heuristicQuery(safeTask);
+                via = "keyword-heuristic-after-generator-error";
+                recordTypingWarning(step, generated.code, generated.message, { finishReason: generated.finishReason, fallback: "keyword-heuristic" });
+              }
+            }
+            await page.fill(selectorFor(element), text, { timeout: bounded(4_000) });
             await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
-            detail = `typed "${generated.text}" via ${generated.via}`;
+            detail = `searched "${text}" via ${via}`;
             typedIntoLabel = element.description.match(/"([^"]*)"/)?.[1] ?? element.kind;
+          }
+        } else if (chosen.startsWith("submit_")) {
+          if (element.submitVia === "click") {
+            await page.click(selectorFor(element), { timeout: bounded(4_000) });
+            detail = `submitted form: ${element.description}`;
+          } else {
+            await page.press(selectorFor(element), "Enter", { timeout: bounded(4_000) });
+            detail = `submitted form: Enter on ${element.description}`;
           }
         } else if (chosen.startsWith("select_")) {
           const opts = element.options ?? [];
           if (opts.length === 0) {
             actionError = "select had no options";
           } else {
+            // Labels are scrubbed and display-capped, so the model picks by
+            // label but selection happens by live DOM index: a scrubbed or
+            // truncated label can never become the selection key.
             const optionAnswer = await askJev(
               budget,
-              { task, page: { url: observables.url, title: observables.title }, dropdown: element.description, options: opts },
-              { option: selectOptionQuestion(element.description, opts) },
+              { task: safeTask, page: { url: R(observables.url), title: R(observables.title) }, dropdown: element.description, options: opts.map((o) => o.label) },
+              { option: selectOptionQuestion(element.description, opts.map((o) => o.label)) },
             );
             const pickedIndex = Number((optionAnswer.option.choice as string).slice(1));
-            const label = opts[pickedIndex] ?? opts[0];
-            await page.selectOption(selectorFor(element), { label });
-            detail = `selected "${label}"`;
+            const opt = opts[pickedIndex] ?? opts[0];
+            await page.selectOption(selectorFor(element), { index: opt.i }, { timeout: bounded(4_000) });
+            detail = `selected "${opt.label}"`;
+          }
+        } else if (chosen.startsWith("fill_password_")) {
+          if (!options.password || !trustedOrigin) {
+            actionError = "no password source is active";
+          } else {
+            // The check and the fill run as ONE in-page task on the element
+            // the locator resolved: type, connectedness, and page origin are
+            // read and the value written inside the same JS task, so no
+            // navigation or DOM mutation can interleave between validation
+            // and assignment. The value is set through the native setter and
+            // announced with input/change events, matching fill() semantics
+            // for framework-controlled inputs.
+            credentialUsed = true; // even a failed attempt suppresses the screenshot
+            const handle = page.locator(selectorFor(element));
+            const fill = await handle
+              .evaluate((el, args) => {
+                const input = el;
+                if (!(input instanceof HTMLInputElement) || input.type !== "password" || !input.isConnected) {
+                  return { ok: false as const, reason: "not_password_input" as const };
+                }
+                if (window.location.origin !== args.trustedOrigin) {
+                  return { ok: false as const, reason: "origin_mismatch" as const, origin: window.location.origin };
+                }
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+                if (setter) setter.call(input, args.value);
+                else input.value = args.value;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+                return { ok: true as const };
+              }, { trustedOrigin, value: passwordValue! })
+              .catch(() => null);
+            if (!fill) {
+              actionError = "password fill failed; the element disappeared or the page navigated";
+            } else if (!fill.ok && fill.reason === "origin_mismatch") {
+              actionError = `origin_mismatch: refused to fill on ${fill.origin}; the password is bound to ${trustedOrigin}`;
+            } else if (!fill.ok) {
+              actionError = "element is no longer a native password input";
+            } else {
+              passwordFilled = true;
+              const pwLabel = element.description.match(/"([^"]*)"/)?.[1] ?? "password";
+              detail = `filled password into "${pwLabel}"; not submitted`;
+            }
           }
         } else {
           await page.click(selectorFor(element), { timeout: bounded(4_000) });
@@ -541,7 +882,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         }
       } catch (error) {
         if (controller.signal.aborted) throw error; // deadline/cancellation propagates
-        actionError = (error as Error).message.slice(0, 160);
+        actionError = R((error as Error).message).slice(0, 160);
       }
 
       await settle(page, bounded);
@@ -552,7 +893,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         detail += " (followed new tab)";
       }
 
-      const after = await pageObservables(page, bounded);
+      const after = await pageObservables(page, bounded, excerptCap);
       // Execution failures are attributed to the action, not to ambient page
       // changes that happened to occur in the same window.
       const pageUnchanged =
@@ -564,9 +905,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const outcome = actionError
         ? "action failed"
         : after.url !== observables.url
-          ? `navigated to ${after.url}`
+          ? `navigated to ${R(after.url)}`
           : after.title !== observables.title
-            ? `page changed: "${after.title}"`
+            ? `page changed: "${R(after.title)}"`
             : Math.abs(after.textLength - observables.textLength) > 50
               ? "page content changed"
               : Math.abs(after.scrollY - observables.scrollY) > 40
@@ -580,48 +921,56 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       lastRedundant = pageUnchanged ? (typedIntoLabel !== null ? "typed" : "no_change") : null;
 
       lastExecuted = chosen;
-      lastOutcome = outcome;
-      history.push({ step, action: chosen, outcome });
+      history.push({ step, action: chosen, outcome: R(outcome) });
       steps.push({
         ...base,
         executed_action: chosen,
-        detail,
+        detail: R(detail),
         recovery_reason: recoveryReason,
-        action_error: actionError,
-        outcome,
+        action_error: actionError ? R(actionError) : undefined,
+        outcome: R(outcome),
       });
 
       if (step === maxSteps) status = "max_steps";
     }
 
-    const finalObservables = await pageObservables(page, bounded);
+    const finalObservables = await pageObservables(page, bounded, excerptCap);
     let payload: { truncated: boolean; true_length: number; content: string } | null = null;
     let screenshotBase64: string | null = null;
+    let screenshotSuppressed: "credential-fill" | undefined;
     try {
-      payload = await extractPayload(page, format, maxChars, bounded);
+      payload = await extractPayload(page, format, maxChars, bounded, R);
     } catch (error) {
-      extractionProblems.push(`page payload: ${(error as Error).message.slice(0, 160)}`);
+      // Redact the full message at push time; the display slice happens at
+      // result assembly, after redaction, so no prefix of an echoed value can
+      // survive the 160-char boundary.
+      extractionProblems.push(R(`page payload: ${(error as Error).message}`));
     }
     if (screenshot === "final") {
-      try {
-        const buffer = await page.screenshot({ type: "jpeg", quality: 70, timeout: bounded(10_000) });
-        screenshotBase64 = buffer.toString("base64");
-      } catch (error) {
-        extractionProblems.push(`screenshot: ${(error as Error).message.slice(0, 160)}`);
+      if (credentialUsed) {
+        // The page can reflect the filled value; no capture after exposure.
+        screenshotSuppressed = "credential-fill";
+      } else {
+        try {
+          const buffer = await page.screenshot({ type: "jpeg", quality: 70, timeout: bounded(10_000) });
+          screenshotBase64 = buffer.toString("base64");
+        } catch (error) {
+          extractionProblems.push(R(`screenshot: ${(error as Error).message}`));
+        }
       }
     }
 
-    await browser.close().catch(() => {});
+    if (ownsBrowser) await browser?.close().catch(() => {});
     const videoPath = (await videoPathPromise?.catch(() => undefined)) ?? null;
-    return {
+    const result = {
       status,
       video_path: videoPath,
-      final_url: finalObservables.url,
-      final_title: finalObservables.title,
+      final_url: R(finalObservables.url),
+      final_title: R(finalObservables.title),
       format,
       max_chars: maxChars,
       page: payload,
-      extraction_problems: extractionProblems.length ? extractionProblems : undefined,
+      extraction_problems: extractionProblems.length ? extractionProblems.map(R).map((s) => s.slice(0, 160)) : undefined,
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
@@ -629,14 +978,25 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       elapsed_ms: Math.round(performance.now() - started),
       model: budget.model,
       jev_provider: budget.provider,
+      degraded: warnings.length > 0,
+      warnings,
+      typing_provider: typingGenerator?.provider ?? null,
+      typing_model: typingGenerator?.modelId ?? null,
+      password_filled: passwordFilled || undefined,
+      screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
     };
+    // Final boundary: a deep pass over everything this run returns, so no
+    // field added later (payloads, traces, problems) can echo the value in any
+    // representation the redactor knows. Earlier R() calls stay: they keep the
+    // model-facing inputs clean during the run, not just its outputs.
+    return redactor ? redactor.redactDeep(result) : result;
   } catch (runError) {
     const aborted = controller.signal.aborted;
     status = aborted && String((runError as Error).message).includes("deadline") ? "timeout" : "error";
-    return {
+    const failure = {
       status,
-      error: aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message,
+      error: R(aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message),
       steps,
       console_events: consoleEvents,
       console_events_dropped: consoleDropped,
@@ -644,11 +1004,18 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       elapsed_ms: Math.round(performance.now() - started),
       model: budget.model,
       jev_provider: budget.provider,
+      degraded: warnings.length > 0,
+      warnings,
+      typing_provider: typingGenerator?.provider ?? null,
+      typing_model: typingGenerator?.modelId ?? null,
     };
+    return redactor ? redactor.redactDeep(failure) : failure;
   } finally {
     clearTimeout(deadlineTimer);
     externalSignal?.removeEventListener("abort", onExternalAbort);
-    await browser?.close().catch(() => {});
+    if (observedContext && onNewPage) observedContext.off("page", onNewPage);
+    for (const cleanup of observerCleanups.splice(0).reverse()) cleanup();
+    if (ownsBrowser) await browser?.close().catch(() => {});
   }
 }
 
@@ -657,6 +1024,7 @@ async function extractPayload(
   format: string,
   maxChars: number,
   bounded: (cap: number) => number,
+  redact: (s: string) => string = (s) => s,
 ): Promise<{ truncated: boolean; true_length: number; content: string }> {
   let content = "";
   if (format === "html") {
@@ -672,10 +1040,14 @@ async function extractPayload(
     content = await page.locator("body").ariaSnapshot({ timeout: bounded(10_000) });
   } else if (format === "markdown") {
     const html = await page.evaluate(() => document.body?.innerHTML ?? "");
-    content = turndown.turndown(html);
+    // Redact the source HTML before conversion: entity and attribute forms
+    // of an echoed value exist in the DOM string, not the markdown output,
+    // and turndown can mangle them past the redactor's patterns.
+    content = turndown.turndown(redact(html));
   } else {
     content = await page.evaluate(() => document.body?.innerText ?? "");
   }
+  content = redact(content);
   return {
     truncated: content.length > maxChars,
     true_length: content.length,
