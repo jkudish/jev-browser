@@ -11,6 +11,7 @@ import {
   pickAlternate,
 } from "../dist/lib.js";
 import { navigate } from "../dist/navigate.js";
+import { askJev, normalizeJevAnswers } from "../dist/provider.js";
 
 const el = (over = {}) => ({
   attr: "j1",
@@ -991,4 +992,128 @@ test("generateTextToType: the google provider generates without a compatibility 
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+// --- Requesty transport ---------------------------------------------------
+
+test("askJev via Requesty: sends the questions response_format and reads the answers back", async () => {
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.REQUESTY_API_KEY;
+  const realProvider = process.env.JEV_PROVIDER;
+  let seen;
+  globalThis.fetch = async (url, init) => {
+    seen = { url: String(url), headers: init.headers, body: JSON.parse(init.body) };
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                action: { type: "choice", choice: "click_e3", probabilities: { click_e3: 0.82, done: 0.18 }, confidence: 0.77 },
+                goal_done: { type: "noul", noul: 0.12 },
+              }),
+            },
+          },
+        ],
+        usage: { prompt_tokens: 910, completion_tokens: 0 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  process.env.REQUESTY_API_KEY = "test-requesty-key";
+  process.env.JEV_PROVIDER = "requesty";
+  try {
+    const questions = {
+      action: { type: "choice", instructions: "Pick one", criteria: { click_e3: "a link", done: "stop" } },
+      goal_done: { type: "noul", instructions: "Is the goal met?" },
+    };
+    const out = await askJev({ url: "https://x.test/" }, questions, "jev-latest", new AbortController().signal);
+
+    assert.equal(seen.url, "https://router.requesty.ai/v1/chat/completions");
+    assert.equal(seen.headers.Authorization, "Bearer test-requesty-key");
+    assert.equal(seen.body.model, "typesafe/jev-1.13.0"); // jev-latest maps to the pinned Requesty slug
+    assert.equal(seen.body.messages.length, 1);
+    assert.equal(seen.body.messages[0].role, "user");
+    assert.equal(typeof seen.body.messages[0].content, "string"); // text-only; Requesty rejects structured content
+    assert.deepEqual(JSON.parse(seen.body.messages[0].content), { url: "https://x.test/" });
+    assert.equal(seen.body.response_format.type, "questions");
+    assert.deepEqual(seen.body.response_format.questions, questions);
+    assert.equal(seen.body.stream, undefined); // the route does not support streaming
+
+    assert.equal(out.provider, "requesty");
+    assert.equal(out.model, "typesafe/jev-1.13.0");
+    assert.equal(out.answers.action.choice, "click_e3");
+    assert.equal(out.answers.action.confidence, 0.77);
+    assert.equal(out.answers.goal_done.noul, 0.12);
+    assert.deepEqual(out.usage, { input_tokens: 910, output_tokens: 0 });
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.REQUESTY_API_KEY;
+    else process.env.REQUESTY_API_KEY = realKey;
+    if (realProvider === undefined) delete process.env.JEV_PROVIDER;
+    else process.env.JEV_PROVIDER = realProvider;
+  }
+});
+
+test("askJev via Requesty: a non-JSON or empty answer is an error, never a silent decision", async () => {
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.REQUESTY_API_KEY;
+  const realProvider = process.env.JEV_PROVIDER;
+  process.env.REQUESTY_API_KEY = "test-requesty-key";
+  process.env.JEV_PROVIDER = "requesty";
+  const reply = (payload, status = 200) =>
+    new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
+  try {
+    globalThis.fetch = async () => reply({ choices: [{ finish_reason: "length", message: { content: "" } }] });
+    await assert.rejects(
+      () => askJev({}, { goal_done: { type: "noul" } }, "jev-latest", undefined),
+      /no answer content \(finish_reason length\)/,
+    );
+
+    globalThis.fetch = async () => reply({ choices: [{ message: { content: "I think you should click." } }] });
+    await assert.rejects(
+      () => askJev({}, { goal_done: { type: "noul" } }, "jev-latest", undefined),
+      /not JSON/,
+    );
+
+    globalThis.fetch = async () => reply({ error: { message: "no credits" } }, 402);
+    await assert.rejects(
+      () => askJev({}, { goal_done: { type: "noul" } }, "jev-latest", undefined),
+      /Requesty chat\/completions 402/,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.REQUESTY_API_KEY;
+    else process.env.REQUESTY_API_KEY = realKey;
+    if (realProvider === undefined) delete process.env.JEV_PROVIDER;
+    else process.env.JEV_PROVIDER = realProvider;
+  }
+});
+
+test("normalizeJevAnswers lifts flattened answers back into the typed shapes", () => {
+  const questions = {
+    action: { type: "choice" },
+    goal_done: { type: "noul" },
+    stuck: { type: "noul" },
+    rubric: { type: "score" },
+  };
+  const out = normalizeJevAnswers(
+    {
+      action: "click_e3",
+      goal_done: 0.91,
+      stuck: { type: "boolean", probability: 0.04 },
+      rubric: "good",
+    },
+    questions,
+  );
+  assert.deepEqual(out.action, { type: "choice", choice: "click_e3", probabilities: {}, confidence: null });
+  assert.deepEqual(out.goal_done, { type: "noul", noul: 0.91 });
+  assert.deepEqual(out.stuck, { type: "noul", noul: 0.04 });
+  assert.deepEqual(out.rubric, { type: "score", score: "good", probabilities: {}, confidence: null });
+
+  // TypeSafe's own shapes pass through untouched
+  const native = { goal_done: { type: "noul", noul: 0.5 } };
+  assert.deepEqual(normalizeJevAnswers(native, questions).goal_done, native.goal_done);
 });

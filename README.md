@@ -349,14 +349,31 @@ With no provider at all, or when the typing model fails or returns empty text, t
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | none | TypeSafe direct. Default provider when set. |
 | `OPENROUTER_API_KEY` | none | Powers both the Jev judgments (when `TYPESAFE_API_KEY` is absent) and, optionally, the typing model. One key runs everything. |
+| `REQUESTY_API_KEY` | none | Requesty for the Jev judgments; used when neither TypeSafe nor OpenRouter is configured. `REQUESTY_BASE_URL` overrides the router URL. |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. |
-| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
+| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `requesty`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. |
 | `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
 | `JEV_BROWSER_PASSWORD_ORIGIN` | unset | Required for password fill: the exact origin password fields may be filled on. |
 | `JEV_BROWSER_HANDOFF_DIR` | `~/.jev-browser/handoff` | Directory password handoff files must live in (0700). |
+
+### Requesty
+
+Requesty carries Jev over the OpenAI chat-completions shape instead of a decisions endpoint: the state becomes a single text user message and the typed questions ride in a `questions` response_format, with the answers JSON in the assistant message. Set `REQUESTY_API_KEY` and the router is used for the judgments; `jev-latest` maps to `typesafe/jev-1.13.0`, the slug Requesty publishes. Pin another with `JEV_BROWSER_MODEL`.
+
+The same key also serves the typing model, since the router is OpenAI-compatible:
+
+```bash
+JEV_PROVIDER=requesty REQUESTY_API_KEY=... \
+  JEV_BROWSER_TYPE_BASE_URL=https://router.requesty.ai/v1 \
+  JEV_BROWSER_TYPE_API_KEY=... \
+  JEV_BROWSER_TYPE_MODEL=anthropic/claude-haiku-4.5 \
+  npx -y @jkudish/jev-browser run "..." https://example.com
+```
+
+Requesty documents the Jev route as experimental, so a malformed or non-JSON answer is raised as an error rather than being coerced into a decision.
 
 ### Vercel
 
