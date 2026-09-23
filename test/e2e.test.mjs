@@ -239,7 +239,7 @@ test("typed search: find the Ristretto article", { skip: !hasKey }, async () => 
       { timeout: 240_000 },
     );
     const body = payload(result);
-    assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}: ${JSON.stringify(body.steps)}`);
+    assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}: ${JSON.stringify(body.error)} steps: ${JSON.stringify(body.steps)}`);
     assert.match(body.final_url, /Ristretto/);
   });
 });
