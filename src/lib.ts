@@ -394,21 +394,27 @@ export interface BotProtection {
   evidence: string[];
   guidance: string;
   /**
-   * True when the page itself shows the markers (its title or body), not just
-   * a response header. Only page evidence may stop a run: a cf-mitigated
-   * header alone means a challenge answered the navigation, which can still
-   * auto-pass and paint the real page.
+   * True when the page itself shows decisive evidence (a challenge title, or
+   * three body markers including a brand phrase) that stands on its own, not
+   * a response header with at most incidental body phrases. Only page
+   * evidence may stop a run: a cf-mitigated header alone means a challenge
+   * answered the navigation, which can still auto-pass and paint the real
+   * page.
    */
   from_page: boolean;
 }
 
-const BOT_TITLES: Array<{ text: string; block?: boolean }> = [
+const BOT_TITLES: Array<{ text: string; block?: boolean; generic?: boolean }> = [
   { text: "just a moment..." },
   { text: "attention required! | cloudflare", block: true },
   { text: "please wait... | cloudflare" },
-  { text: "verify you are human" },
-  { text: "verifying you are human" },
-  { text: "checking your browser before accessing" },
+  // Generic wordings that other verification services also use: they only
+  // count when something Cloudflare-specific corroborates them (a brand body
+  // marker or the cf-mitigated header), or another CDN's page gets
+  // Cloudflare-specific guidance.
+  { text: "verify you are human", generic: true },
+  { text: "verifying you are human", generic: true },
+  { text: "checking your browser before accessing", generic: true },
 ];
 
 // Longest-first within overlapping pairs so "sorry, you have been blocked"
@@ -441,37 +447,37 @@ const BOT_GUIDANCE = {
 
 /**
  * Pure detector for CDN bot-protection interstitials. Scoring: a Cloudflare
- * response header (cf-mitigated: challenge|blocked) or a known challenge
- * title counts fully; body markers count one point each and need three,
- * including at least one Cloudflare-brand phrase, to stand alone, so an
- * article that quotes a few challenge lines is not flagged as a wall. A
- * marker already matched absorbs its substrings (one visual phrase is one
- * marker). Block markers (a hard denial page) outrank challenge markers.
+ * response header (cf-mitigated: challenge|blocked) is decisive on its own but
+ * is never page evidence; a Cloudflare-signature or branded challenge title
+ * counts fully (generic wordings like "Verify you are human" need a
+ * Cloudflare-brand body marker or the header to corroborate them); body
+ * markers count one point each and need three, including at least one
+ * Cloudflare-brand phrase, to stand alone, so an article that quotes a few
+ * challenge lines is not flagged as a wall. A marker already matched absorbs
+ * its substrings (one visual phrase is one marker). `from_page` means the page
+ * evidence independently meets the stopping threshold, never a header plus an
+ * incidental body phrase. Block markers (a hard denial page) outrank challenge
+ * markers, but only promote the kind when the evidence carrying them is
+ * decisive.
  */
 export function detectBotProtection(signals: BotProtectionSignals): BotProtection | null {
   const title = signals.title.trim().toLowerCase();
   const excerpt = signals.excerpt.toLowerCase();
-  const evidence: string[] = [];
-  let decisive = false;
-  let block = false;
-  let fromPage = false;
   const header = (signals.cfMitigated ?? "").trim().toLowerCase();
-  if (header === "challenge" || header === "blocked") {
-    decisive = true;
-    block ||= header === "blocked";
-    evidence.push(`header cf-mitigated: ${header}`);
-  }
+  const headerCf = header === "challenge" || header === "blocked";
+  let block = header === "blocked";
+
+  let titleHit: (typeof BOT_TITLES)[number] | null = null;
   for (const t of BOT_TITLES) {
     if (title.includes(t.text)) {
-      decisive = true;
-      block ||= Boolean(t.block);
-      fromPage = true;
-      evidence.push(`title "${t.text}"`);
+      titleHit = t;
       break;
     }
   }
+
   let bodyPoints = 0;
   let brandSeen = false;
+  let blockFromBody = false;
   const matched: string[] = [];
   for (const m of BOT_BODY_MARKERS) {
     if (!excerpt.includes(m.text)) continue;
@@ -479,16 +485,29 @@ export function detectBotProtection(signals: BotProtectionSignals): BotProtectio
     matched.push(m.text);
     bodyPoints += 1;
     brandSeen ||= Boolean(m.brand);
-    block ||= Boolean(m.block);
-    fromPage = true;
-    if (evidence.length < 4) evidence.push(`body "${m.text}"`);
+    blockFromBody ||= Boolean(m.block);
   }
-  if (!decisive && (bodyPoints < 3 || !brandSeen)) return null;
+
+  const bodyDecisive = bodyPoints >= 3 && brandSeen;
+  const titleDecisive = titleHit !== null && (!titleHit.generic || brandSeen || headerCf);
+  // from_page is the DOM decision alone: it is what license the run loop has
+  // to stop, and a header plus one incidental body phrase must not grant it.
+  const pageDecisive = titleDecisive || bodyDecisive;
+  if (!pageDecisive && !headerCf) return null;
+
+  const evidence: string[] = [];
+  if (headerCf) evidence.push(`header cf-mitigated: ${header}`);
+  if (titleDecisive) evidence.push(`title "${titleHit!.text}"`);
+  for (const m of matched) {
+    if (evidence.length >= 4) break;
+    evidence.push(`body "${m}"`);
+  }
+  block ||= (titleDecisive && Boolean(titleHit!.block)) || (bodyDecisive && blockFromBody);
   return {
     provider: "cloudflare",
     kind: block ? "block" : "challenge",
     evidence,
     guidance: block ? BOT_GUIDANCE.block : BOT_GUIDANCE.challenge,
-    from_page: fromPage,
+    from_page: pageDecisive,
   };
 }

@@ -623,6 +623,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     // a page "blocked" after its challenge auto-passed. A detected challenge
     // gets one short bounded window to clear itself before the run is
     // declared blocked; a hard block page never clears, so it waits none.
+    // settleBotProtection distinguishes a wall whose persistence was VERIFIED
+    // (the window ran and the wall was still there) from an unverified one
+    // (no budget for the window): only a verified challenge, or any hard
+    // block, may become the run's outcome; an unverified challenge keeps the
+    // budget outcome (timeout) and is reported as evidence instead.
     const probeBotProtection = async (): Promise<BotProtection | null> => {
       const probe = await page
         .evaluate(() => ({
@@ -632,17 +637,28 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         .catch(() => ({ title: "", body: "" }));
       return detectBotProtection({ title: probe.title, excerpt: probe.body });
     };
-    const settleBotProtection = async (detected: BotProtection): Promise<BotProtection | null> => {
-      if (detected.kind !== "challenge") return detected;
+    const settleBotProtection = async (
+      detected: BotProtection,
+    ): Promise<{ protection: BotProtection; verified: boolean } | null> => {
+      // A hard block never clears, so the page itself establishes persistence.
+      if (detected.kind !== "challenge") return { protection: detected, verified: true };
       const settleDeadline = performance.now() + bounded(8_000);
+      let verified = false;
       while (performance.now() < settleDeadline && remaining() > 1_000) {
         await page.waitForTimeout(bounded(1_000));
         const now = await probeBotProtection();
-        if (!now) return null;
-        if (now.kind === "block") return now;
+        if (!now) return null; // cleared: the real page painted
+        if (now.kind === "block") return { protection: now, verified: true };
+        verified = true; // still a challenge after a wait: persistence verified
       }
-      return detected;
+      return { protection: detected, verified };
     };
+    // A settled wall becomes the outcome only when its persistence was
+    // established (any hard block, or a challenge that survived its window).
+    // Otherwise the deadline has effectively fired and the budget outcome
+    // keeps precedence: the wall is annotated, the status stays timeout.
+    const wallIsOutcome = (settled: { protection: BotProtection; verified: boolean }) =>
+      settled.protection.kind === "block" || settled.verified;
 
     let lastExecuted: string | null = null;
     // Machine state for repeat recovery, decoupled from the display string:
@@ -667,8 +683,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       if (detectedProtection) {
         const settledProtection = await settleBotProtection(detectedProtection);
         if (settledProtection) {
-          botProtection = settledProtection;
-          status = "blocked";
+          botProtection = settledProtection.protection;
+          status = wallIsOutcome(settledProtection) ? "blocked" : "timeout";
           break;
         }
       }
@@ -957,19 +973,25 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       if (step === maxSteps) status = "max_steps";
     }
 
-    const finalObservables = await pageObservables(page, bounded, excerptCap);
+    let finalObservables = await pageObservables(page, bounded, excerptCap);
     // The final page gets the last word. A wall that appeared after the last
     // action (or after a done/goal judgment while the page changed under it)
     // must not masquerade as done: DOM-only detection (no header, so a
     // passed-challenge header cannot manufacture page evidence) with the same
-    // settle window flips the status to blocked. Header-only detection stays
-    // annotation: it never changes the outcome.
+    // settle window flips the status to blocked. The settle window can also
+    // REPAINT the page (a challenge that auto-passes), so observables are
+    // re-captured after it: the flip decision, any annotation, and the
+    // reported final page must all describe the page that is there now, not
+    // the one captured before the wait. A wall that could not be verified
+    // persistent (no budget for the window) flips nothing; header-only
+    // evidence stays annotation and never changes the outcome either.
     if (!botProtection) {
       const finalDecision = detectBotProtection({ title: finalObservables.title, excerpt: finalObservables.excerpt });
       if (finalDecision) {
         const settledFinal = await settleBotProtection(finalDecision);
-        if (settledFinal) {
-          botProtection = settledFinal;
+        finalObservables = await pageObservables(page, bounded, excerptCap);
+        if (settledFinal && wallIsOutcome(settledFinal)) {
+          botProtection = settledFinal.protection;
           status = "blocked";
         }
       }

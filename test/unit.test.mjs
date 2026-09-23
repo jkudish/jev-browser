@@ -1082,11 +1082,40 @@ test("detectBotProtection: evidence is capped at four entries", () => {
   assert.ok(d.evidence.length <= 4);
 });
 
-test("detectBotProtection: the Verifying-you-are-human variant is a decisive title", () => {
-  const d = detectBotProtection({ title: "Verifying you are human", excerpt: "Verifying you are human. This may take a few seconds." });
+test("detectBotProtection: the Verifying-you-are-human variant needs Cloudflare corroboration", () => {
+  // The generic wording alone is not Cloudflare-specific: another service's
+  // verification page must not get Cloudflare guidance.
+  const bare = detectBotProtection({ title: "Verifying you are human", excerpt: "Verifying you are human. This may take a few seconds." });
+  assert.equal(bare, null);
+  // The real variant carries brand evidence with it.
+  const branded = detectBotProtection({
+    title: "Verifying you are human",
+    excerpt: "Verifying you are human. This may take a few seconds. Ray ID: 8ab1c2d3e4f5a6b7",
+  });
+  assert.ok(branded);
+  assert.equal(branded.kind, "challenge");
+  assert.equal(branded.from_page, true);
+  assert.ok(branded.evidence.some((e) => e.startsWith("title ")));
+  // A cf-mitigated header corroborates the generic title too.
+  const viaHeader = detectBotProtection({ title: "Verify you are human", excerpt: "Checking your connection.", cfMitigated: "challenge" });
+  assert.ok(viaHeader);
+  assert.equal(viaHeader.kind, "challenge");
+  assert.equal(viaHeader.from_page, true);
+});
+
+test("detectBotProtection: an incidental block phrase does not flip the header's kind", () => {
+  // A clean page delivered with cf-mitigated: challenge that quotes one block
+  // phrase (an article, a support page): the header's kind stands, and the
+  // page never becomes run-stopping evidence.
+  const d = detectBotProtection({
+    title: "How Cloudflare works",
+    excerpt: "When a site is denied, the page says sorry, you have been blocked, and shows an error code.",
+    cfMitigated: "challenge",
+  });
   assert.ok(d);
-  assert.equal(d.kind, "challenge");
-  assert.equal(d.from_page, true);
+  assert.equal(d.kind, "challenge", "a single incidental body phrase must not promote block");
+  assert.equal(d.from_page, false);
+  assert.ok(d.evidence.includes("header cf-mitigated: challenge"));
 });
 
 test("detectBotProtection: body-only detection needs a Cloudflare-brand phrase among the markers", () => {

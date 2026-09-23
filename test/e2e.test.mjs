@@ -106,6 +106,11 @@ async function startFixtureSite() {
       // maxSteps 1, the click executes, the budget ends, and the challenge is
       // first visible on the FINAL page. The final pass must flip the status.
       res.end(page("Start here", `<p>An ordinary page.</p><a href="/locked">Continue</a>`));
+    } else if (url.pathname === "/lockclearing") {
+      // Same shape as /locklate, but the destination challenge clears itself
+      // (see /clearing): the final pass must wait it out and report the real
+      // page, not a wall that has already gone.
+      res.end(page("Start here", `<p>An ordinary page.</p><a href="/clearing">Continue</a>`));
     } else if (url.pathname === "/mitigated") {
       // A clean page delivered with Cloudflare's cf-mitigated header, as a
       // passed challenge looks in the response log: the header alone must
@@ -1206,6 +1211,53 @@ test("bot protection: a wall that appears on the final page flips the status ins
     assert.equal(body.usage.jev_calls, 1);
     assert.match(body.steps[0].executed_action ?? "", /^click_/);
     assert.match(body.final_title, /Just a moment/);
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: a final-page challenge that clears in its window reports the real page", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Click the Continue link",
+      startUrl: `${site.baseUrl}/lockclearing`,
+      maxSteps: 1,
+      maxSeconds: 60,
+    });
+    // The challenge was on the final page when the budget ended, but it
+    // auto-passed during the settle window: the outcome must NOT flip to
+    // blocked, no wall may be annotated from the stale pre-settle page, and
+    // the reported final page must be the real content that painted after it.
+    assert.equal(body.status, "max_steps", `expected max_steps, got ${body.status}`);
+    assert.equal(body.bot_protection, undefined, "a cleared final-page challenge must not leave bot_protection set");
+    assert.equal(body.final_title, "Welcome in");
+    assert.equal(body.steps.length, 1);
+    assert.equal(body.usage.jev_calls, 1);
+    assert.match(body.steps[0].executed_action ?? "", /^click_/);
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: a challenge the budget cannot verify keeps the timeout outcome", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Report the page title and stop",
+      startUrl: `${site.baseUrl}/locked`,
+      maxSteps: 2,
+      maxSeconds: 1,
+    });
+    // The wall is on the page, but the run has no budget left for the settle
+    // window that would verify the challenge persists (it may auto-pass), so
+    // the deadline outcome keeps precedence: timeout, with the wall annotated
+    // as evidence rather than claimed as the outcome.
+    assert.equal(body.status, "timeout", `expected timeout, got ${body.status}`);
+    assert.ok(body.bot_protection, "the unverified wall must still be annotated");
+    assert.equal(body.bot_protection.kind, "challenge");
+    assert.equal(body.usage.jev_calls, 0);
+    assert.equal(body.steps.length, 0);
   } finally {
     site.close();
   }
