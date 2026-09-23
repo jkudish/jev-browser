@@ -21,10 +21,14 @@ jobs:
       - run: npm test
       # Live end-to-end navigation only when a TYPESAFE_API_KEY secret is set.
       - name: Install Chromium for e2e
+        id: install-chromium
         if: env.TYPESAFE_API_KEY != ''
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: npx playwright install --with-deps chromium
+      - name: Transport integration (optional)
+        if: steps.install-chromium.outcome == 'success'
+        run: node --test test/transports.test.mjs
       - name: End-to-end (optional)
         if: env.TYPESAFE_API_KEY != ''
         env:

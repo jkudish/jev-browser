@@ -150,6 +150,30 @@ console.log(result.status, result.final_url);
 console.log(result.page.content);
 ```
 
+### Judgment transports in the library
+
+The built-in Jev transports are TypeSafe, OpenRouter, Cloudflare, and Vercel, selected in that order from configured credentials. `JEV_PROVIDER` forces one of them; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
+
+```ts
+import { navigate, type JevTransport } from "@jkudish/jev-browser";
+
+const transport: JevTransport = {
+  name: "my-gateway", // reported as jev_provider
+  async ask({ state, questions, model, signal }) {
+    const response = await myGateway.decide({ state, questions, model, signal });
+    return {
+      answers: response.answers,
+      usage: { input_tokens: response.inputTokens, output_tokens: response.outputTokens },
+      model: response.effectiveModel,
+    };
+  },
+};
+
+const result = await navigate({ task: "Find the price", startUrl: "https://example.com", transport });
+```
+
+`ask` receives the page state, named questions, requested model, and run abort signal. Return an answer for every requested ID in the matching Jev shape, plus nonnegative integer token counts and the effective model. Choice distributions must cover exactly the offered criteria, sum to about 1, and select a maximum; Noul values must be in [0,1]. Invalid answers stop the run before the action executes. `est_cost_usd` stays a Jev-token estimate, not verified billing for injected carriers.
+
 ## Password fill (logins)
 
 The agent can fill native password fields without the password ever reaching a model. The value arrives through one of three channels, lives in memory for a single run, and is scrubbed from every state, trace, error, URL, and payload the run produces. Video recording is refused on credential runs and the final screenshot is suppressed once a fill is attempted (on injected pages, which may already show the value, from the start of the run). A fill never submits: no Enter, no click.
@@ -409,6 +433,7 @@ With no provider at all, or when the typing model fails or returns empty text, t
 | `TYPESAFE_API_KEY` | none | TypeSafe direct. Default provider when set. |
 | `OPENROUTER_API_KEY` | none | Powers both the Jev judgments (when `TYPESAFE_API_KEY` is absent) and, optionally, the typing model. One key runs everything. |
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. |
+| `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway for Jev judgments after the other providers. |
 | `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. |
 | `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
