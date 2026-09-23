@@ -8,7 +8,9 @@ import {
   isNoiseHref,
   isNoiseName,
   MAX_ELEMENTS,
+  parseCookieSpec,
   pickAlternate,
+  resolveCookies,
 } from "../dist/lib.js";
 import { navigate } from "../dist/navigate.js";
 
@@ -990,5 +992,229 @@ test("generateTextToType: the google provider generates without a compatibility 
     assert.equal(seen.body.generationConfig.reasoning, undefined);
   } finally {
     globalThis.fetch = realFetch;
+  }
+});
+
+
+test("resolveCookies defaults to a host-only cookie with hardening attributes", () => {
+  assert.deepEqual(resolveCookies(undefined, "https://example.com/a"), []);
+  assert.deepEqual(resolveCookies([], "https://example.com/a"), []);
+  // No domain supplied: dotless hostname, which Chromium stores host-only
+  // (exact host, never subdomains) - the safe default for a session cookie.
+  // https start URL: secure cookies. Always httpOnly and SameSite=Lax, path /.
+  assert.deepEqual(
+    resolveCookies([{ name: "session", value: "abc" }], "https://app.example.com:8443/start?x=1"),
+    [{ name: "session", value: "abc", domain: "app.example.com", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }],
+  );
+  // http start URL (loopback fixtures stay seedable): secure stays false
+  // unless the name or sameSite forces it.
+  assert.deepEqual(
+    resolveCookies([{ name: "session", value: "abc" }], "http://127.0.0.1:8080/"),
+    [{ name: "session", value: "abc", domain: "127.0.0.1", path: "/", secure: false, httpOnly: true, sameSite: "Lax" }],
+  );
+  // A caller-supplied domain passes through verbatim (only a leading dot
+  // opts into subdomain matching) and explicit attributes win over defaults.
+  assert.deepEqual(
+    resolveCookies(
+      [{ name: "pref", value: "x", domain: ".example.com", path: "/app", secure: false, httpOnly: false, sameSite: "Strict" }],
+      "https://app.example.com/start",
+    ),
+    [{ name: "pref", value: "x", domain: ".example.com", path: "/app", secure: false, httpOnly: false, sameSite: "Strict" }],
+  );
+  // __Host- names: forced secure even on http loopback, host-only, path "/".
+  assert.deepEqual(
+    resolveCookies([{ name: "__Host-token", value: "abc" }], "http://127.0.0.1:8080/"),
+    [{ name: "__Host-token", value: "abc", domain: "127.0.0.1", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }],
+  );
+  // __Secure- names force secure too.
+  assert.equal(resolveCookies([{ name: "__Secure-sid", value: "abc" }], "http://127.0.0.1/")[0].secure, true);
+  // sameSite None requires Secure in real browsers; force it so the cookie
+  // survives instead of being silently dropped.
+  assert.equal(resolveCookies([{ name: "sid", value: "abc", sameSite: "None" }], "http://127.0.0.1/")[0].secure, true);
+  // A __Host- cookie with an explicit domain or a non-root path is invalid
+  // by definition (the browser would drop it); refuse it with the reason.
+  assert.throws(() => resolveCookies([{ name: "__Host-token", value: "abc", domain: "example.com" }], "https://example.com/"), /__Host- cookie "__Host-token" must stay host-only/);
+  assert.throws(() => resolveCookies([{ name: "__Host-token", value: "abc", path: "/app" }], "https://example.com/"), /__Host- cookie "__Host-token" requires path/);
+  // Validation kept from the original PR: a name and a value are required.
+  assert.throws(() => resolveCookies([{ name: "", value: "abc" }], "https://example.com"), /name and a value/);
+  assert.throws(() => resolveCookies([{ name: "x" }], "https://example.com"), /name and a value/);
+  // Cookie resolution needs an http(s) start URL to bind against.
+  assert.throws(() => resolveCookies([{ name: "x", value: "abc" }], "not a url"), /valid start URL/);
+  assert.throws(() => resolveCookies([{ name: "x", value: "abc" }], "ftp://example.com/"), /http.s. start URL/);
+  // Forced security dominates an explicit false: __Host-, __Secure-, and
+  // SameSite=None cookies are invalid without Secure, so it cannot be
+  // stripped (the browser would drop the cookie anyway).
+  assert.equal(resolveCookies([{ name: "__Host-t", value: "abc", secure: false }], "https://example.com/")[0].secure, true);
+  assert.equal(resolveCookies([{ name: "__Secure-t", value: "abc", secure: false }], "http://127.0.0.1/")[0].secure, true);
+  assert.equal(resolveCookies([{ name: "s", value: "abc", sameSite: "None", secure: false }], "https://example.com/")[0].secure, true);
+  // An explicit false still wins for a plain name on an https start URL.
+  assert.equal(resolveCookies([{ name: "s", value: "abc", secure: false }], "https://example.com/")[0].secure, false);
+  // Validation errors never quote the value: they throw before the run's
+  // redactor exists, so the secret must not ride out in the message.
+  const SECRETISH = "supersecret-cookie-token";
+  assert.throws(
+    () => resolveCookies([{ name: "s", value: SECRETISH, domain: "example.com" }, { name: "__Host-t", value: "x", domain: "example.com" }], "https://example.com/"),
+    (err) => !err.message.includes(SECRETISH),
+  );
+  assert.throws(
+    () => resolveCookies([{ name: "", value: SECRETISH }], "https://example.com/"),
+    (err) => !err.message.includes(SECRETISH) && /name and a value/.test(err.message),
+  );
+});
+
+test("parseCookieSpec splits on the first = only", () => {
+  assert.deepEqual(parseCookieSpec("session=abc"), { name: "session", value: "abc" });
+  assert.deepEqual(parseCookieSpec("jwt=eyJ.a=b=="), { name: "jwt", value: "eyJ.a=b==" });
+  assert.deepEqual(parseCookieSpec("empty="), { name: "empty", value: "" });
+  // A bare argument may be a value pasted by mistake; the error must not
+  // quote it back to stderr.
+  assert.throws(() => parseCookieSpec("supersecret-cookie-token"), (err) => !err.message.includes("supersecret-cookie-token") && /name=value/.test(err.message));
+  assert.throws(() => parseCookieSpec("=x"), /name=value/);
+});
+
+test("makeRedactor redacts several secrets, longest first (prefix case)", () => {
+  // Two cookie values where one is a prefix of the other, plus a password:
+  // every value must redact, and the shorter prefix must never survive inside
+  // the longer value's match.
+  const { redact, redactDeep } = makeRedactor(["s3ssion-prefix-token", "s3ssion", "hunter2!"]);
+  assert.equal(redact("a s3ssion-prefix-token b"), `a ${PASSWORD_REDACTED} b`);
+  assert.equal(redact("a s3ssion b"), `a ${PASSWORD_REDACTED} b`);
+  assert.equal(redact("pw hunter2! ok"), `pw ${PASSWORD_REDACTED} ok`);
+  // Adjacent echoes of two different secrets, and one embedded in the other.
+  assert.ok(!redact("x s3ssion-prefix-token s3ssion y").includes("s3ssion"));
+  assert.ok(redact("x s3ssion-prefix-token s3ssion y").includes(PASSWORD_REDACTED));
+  // Encoded forms of each secret still redact.
+  assert.ok(!redact(`q=${encodeURIComponent("s3ssion-prefix-token")}`).includes("s3ssion"));
+  // Deep pass covers every secret across nested structures.
+  const deep = redactDeep({ steps: ["s3ssion-prefix-token", { text: "s3ssion" }], url: "x?s3ssion" });
+  assert.equal(JSON.stringify(deep).includes("s3ssion"), false);
+  // Idempotence: redacting redacted output changes nothing.
+  const once = redact("s3ssion-prefix-token and s3ssion");
+  assert.equal(redact(once), once);
+});
+
+test("navigate refuses seed cookies on an injected page before touching it", async () => {
+  const explosive = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        throw new Error(`injected page must not be touched (read .${String(prop)})`);
+      },
+    },
+  );
+  // The guard must fire on options alone: any property access on the proxy
+  // (context(), addCookies via the context, url) fails the test.
+  await assert.rejects(
+    () =>
+      navigate({
+        task: "x",
+        page: explosive,
+        startUrl: "https://example.com",
+        cookies: [{ name: "session", value: "unit-cookie-value" }],
+      }),
+    /seed cookies are refused on runs with an injected page/,
+  );
+});
+
+test("navigate refuses recording on seed-cookie runs before any browser is armed", async () => {
+  // No browser is launched for this call: the refusal must come from the
+  // pre-timer guard region, like the injected-page recordDir refusal.
+  await assert.rejects(
+    () =>
+      navigate({
+        task: "x",
+        startUrl: "https://example.com",
+        recordDir: "/tmp/jev-unused",
+        cookies: [{ name: "session", value: "unit-cookie-value" }],
+      }),
+    /video recording is refused on runs with seed cookies/,
+  );
+});
+
+test("navigate refuses cookie values that could never be redacted reliably", async () => {
+  // Same validation as the password value: too short, control characters, or
+  // a line break would leave echoes the redactor cannot match.
+  await assert.rejects(
+    () => navigate({ task: "x", startUrl: "https://example.com", cookies: [{ name: "session", value: "abc" }] }),
+    /cookie "session" is shorter than/,
+  );
+  await assert.rejects(
+    () => navigate({ task: "x", startUrl: "https://example.com", cookies: [{ name: "session", value: "unit-cookie-value\u0007" }] }),
+    /cookie "session" contains a control character/,
+  );
+  await assert.rejects(
+    () => navigate({ task: "x", startUrl: "https://example.com", cookies: [{ name: "session", value: "unit-cookie-value\n" }] }),
+    /cookie "session" contains a line break/,
+  );
+});
+
+test("cookie runs are credential runs end to end: seeded, gated, redacted, unscreenrecorded", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const { createServer } = await import("node:http");
+  const VALUE = "unit-cookie-secret-value";
+  let documentCookie = "";
+  let gatedDocuments = 0;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const cookie = req.headers.cookie ?? "";
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    // Only the document request is judged; Chromium's favicon probe must not
+    // muddy the assertions.
+    if (url.pathname === "/orders") {
+      documentCookie = cookie;
+      if (!cookie.split(";").some((part) => part.trim() === "session=" + VALUE)) {
+        gatedDocuments += 1;
+        res.statusCode = 403;
+        res.end("<!doctype html><html><head><title>Forbidden</title></head><body><h1>403 sign in required</h1></body></html>");
+        return;
+      }
+    }
+    // Authenticated content echoes the value the way a hostile page would:
+    // visible text plus console output, so the test proves every echo redacts.
+    res.end(
+      `<!doctype html><html><head><title>Orders</title></head><body><h1>Order 1</h1>` +
+        `<p id="mirror">mirror: ${VALUE}</p>` +
+        `<script>console.error("echo: ${VALUE}")</script>` +
+        `</body></html>`,
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    // maxSeconds 0: the loop breaks at step 1 before any model call; the
+    // navigation, seeding, redaction, and result assembly still run.
+    const result = await navigate({
+      task: "Read the newest order",
+      startUrl: origin + "/orders",
+      maxSeconds: 0,
+      cookies: [{ name: "session", value: VALUE }],
+    });
+    assert.equal(result.status, "timeout");
+    // The cookie actually seeded: the document 403s without it.
+    assert.equal(gatedDocuments, 0, "the fixture saw the document request without the cookie");
+    assert.ok(documentCookie.split(";").some((part) => part.trim() === "session=" + VALUE), "the server must receive the seeded cookie");
+    // The authenticated page was reached and its echo redacted everywhere.
+    assert.ok(result.page.content.includes("Order 1"), "the gated page content should be in the payload");
+    assert.ok(!JSON.stringify(result).includes(VALUE), "the cookie value must not survive anywhere in the result");
+    assert.ok(result.page.content.includes("mirror: [REDACTED]"), "a reflected echo must be redacted in the payload");
+    const echo = (result.console_events ?? []).find((e) => e.type === "console_error");
+    assert.ok(echo, "the fixture's console.error echo should be captured");
+    assert.match(echo.text, /echo: \[REDACTED\]/);
+    // Credential-run treatment: the final screenshot is suppressed from run
+    // start (the first rendered page can already reflect the value).
+    assert.equal(result.screenshot_base64_jpeg, null);
+    assert.equal(result.screenshot_suppressed, "credential-fill");
+  } finally {
+    await browser.close();
+    server.close();
   }
 });

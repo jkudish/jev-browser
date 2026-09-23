@@ -11,6 +11,8 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 /** Naming a variable with this prefix is the operator's opt-in for password_env. */
 export const PASSWORD_ENV_PREFIX = "JEV_PASSWORD_";
+/** Naming a variable with this prefix is the operator's opt-in for cookie_env. */
+export const COOKIE_ENV_PREFIX = "JEV_COOKIE_";
 export const MAX_SECRET_BYTES = 4096;
 export const MIN_SECRET_CHARS = 4;
 export const PASSWORD_REDACTED = "[REDACTED]";
@@ -142,37 +144,39 @@ export async function readSecretFromStdin(): Promise<Buffer> {
  * single link, its identity re-checked against the pathname, unlinked, and
  * only then read through the already-open descriptor. Once opened, the file
  * is always unlinked, even when a later check fails: it is one-shot, and a
- * rejected secret must not be left on disk.
+ * rejected secret must not be left on disk. The `what` label names the option
+ * in error messages (password_file or cookie_file); the file contents are
+ * never quoted.
  */
-export async function readHandoffSecret(path: string, dir = handoffDir()): Promise<Buffer> {
-  if (!isAbsolute(path)) throw new Error("password_file must be an absolute path inside the handoff directory");
+export async function readHandoffSecret(path: string, dir = handoffDir(), what = "password_file"): Promise<Buffer> {
+  if (!isAbsolute(path)) throw new Error(`${what} must be an absolute path inside the handoff directory`);
   const resolvedPath = resolve(path);
   const resolvedDir = resolve(dir);
   const rel = relative(resolvedDir, resolvedPath);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || rel.includes("/") || rel.includes("\\")) {
-    throw new Error(`password_file must be a file directly inside the handoff directory ${resolvedDir}, not a nested path`);
+    throw new Error(`${what} must be a file directly inside the handoff directory ${resolvedDir}, not a nested path`);
   }
   await ensureHandoffDir(resolvedDir);
   const fh = await open(resolvedPath, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
   let unlinked = false;
   try {
     const st = await fh.stat(); // fstat on the pinned descriptor
-    if (!st.isFile()) throw new Error("password_file is not a regular file");
-    if (st.uid !== process.getuid!()) throw new Error("password_file is not owned by this user");
-    if ((st.mode & 0o777) !== 0o600) throw new Error("password_file must be mode 0600; run chmod 600 on it and retry");
-    if (st.nlink !== 1) throw new Error("password_file has multiple hard links");
-    if (st.size === 0) throw new Error("password_file is empty");
-    if (st.size > MAX_SECRET_BYTES) throw new Error(`password_file exceeds ${MAX_SECRET_BYTES} bytes`);
+    if (!st.isFile()) throw new Error(`${what} is not a regular file`);
+    if (st.uid !== process.getuid!()) throw new Error(`${what} is not owned by this user`);
+    if ((st.mode & 0o777) !== 0o600) throw new Error(`${what} must be mode 0600; run chmod 600 on it and retry`);
+    if (st.nlink !== 1) throw new Error(`${what} has multiple hard links`);
+    if (st.size === 0) throw new Error(`${what} is empty`);
+    if (st.size > MAX_SECRET_BYTES) throw new Error(`${what} exceeds ${MAX_SECRET_BYTES} bytes`);
     // The pathname must still name this exact inode: a replacement between
     // open and unlink would delete a different file than the one validated.
     const named = await lstat(resolvedPath).catch(() => null);
     if (!named || named.ino !== st.ino || named.dev !== st.dev) {
-      throw new Error("password_file was replaced while opening; retry with a fresh file");
+      throw new Error(`${what} was replaced while opening; retry with a fresh file`);
     }
     await unlink(resolvedPath);
     unlinked = true;
     const post = await fh.stat();
-    if (post.nlink !== 0) throw new Error("password_file still has links after being consumed; refusing to trust it");
+    if (post.nlink !== 0) throw new Error(`${what} still has links after being consumed; refusing to trust it`);
     const buf = Buffer.alloc(st.size);
     let read = 0;
     while (read < st.size) {
@@ -207,10 +211,14 @@ const ENV_NAME_RE = /^[A-Z0-9_]+$/;
  * Resolves a password_env request. Only JEV_PASSWORD_* names are considered;
  * every other name is rejected before its value is ever looked up, so the
  * model cannot probe arbitrary environment variables through this path.
+ * The prefix and the option name in errors generalize to JEV_COOKIE_* for
+ * seed-cookie delivery, with identical posture.
  */
-export function readSecretFromEnv(name: string): Buffer {
-  if (!name.startsWith(PASSWORD_ENV_PREFIX) || !ENV_NAME_RE.test(name)) {
-    throw new Error(`password_env must name a ${PASSWORD_ENV_PREFIX}* variable; giving a variable that name is the opt-in`);
+export function readSecretFromEnv(name: string, opts: { prefix?: string; what?: string } = {}): Buffer {
+  const prefix = opts.prefix ?? PASSWORD_ENV_PREFIX;
+  const what = opts.what ?? "password_env";
+  if (!name.startsWith(prefix) || !ENV_NAME_RE.test(name)) {
+    throw new Error(`${what} must name a ${prefix}* variable; giving a variable that name is the opt-in`);
   }
   const value = process.env[name];
   if (value === undefined) throw new Error(`${name} is not set in this server's environment`);
@@ -275,43 +283,52 @@ function normalizeEcho(s: string): string {
 
 /**
  * Per-run redactor covering the representations a page can echo back: the
- * raw value, its percent-encoded forms (URLs), and its HTML-entity forms.
- * Applied to every model-facing state, trace, error, and result payload.
+ * raw value(s), their percent-encoded forms (URLs), and their HTML-entity
+ * forms. Accepts one secret (the password value) or several (the password
+ * plus every seed-cookie value): every representation of every secret is a
+ * variant, variants are applied longest-first, and the marker postcondition
+ * holds for all of them, so a shorter value that is a prefix of a longer
+ * one can never survive inside the longer one's match. Applied to every
+ * model-facing state, trace, error, and result payload.
  */
-export function makeRedactor(secret: string): Redactor {
-  const variants = new Set<string>([secret]);
-  // Percent encodings: encodeURIComponent (both hex cases) and the stricter
-  // application/x-www-form-urlencoded serialization (space becomes +, more
-  // punctuation is escaped), which is what URLSearchParams and form submits
-  // produce.
-  const pct = encodeURIComponent(secret);
-  variants.add(pct);
-  variants.add(pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
-  variants.add(new URLSearchParams({ x: secret }).toString().slice(2));
-  // Servers and proxies sometimes lowercase the percent hex; match that form.
-  variants.add(new URLSearchParams({ x: secret }).toString().slice(2).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
-  // HTML entity encodings: the full named-attribute form, the partial
-  // serializations real DOM APIs produce (textContent escapes only & and <;
-  // attribute serialization escapes & < > " '), and numeric references.
-  const named: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-  const esc = (chars: string) => secret.replace(new RegExp(`[${chars.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}]`, "g"), (c) => named[c]);
-  variants.add(esc("&"));
-  variants.add(esc("&<"));
-  variants.add(esc('&<>"\''));
-  variants.add(Array.from(secret, (c) => `&#${c.codePointAt(0)!};`).join(""));
-  variants.add(Array.from(secret, (c) => `&#x${c.codePointAt(0)!.toString(16)};`).join(""));
-  // Markdown: Turndown escapes its special characters with a backslash, so
-  // a secret containing one comes back as `ab\*cd` in markdown output.
-  variants.add(secret.replace(/([\\`*_[\]])/g, "\\$1"));
-  // ARIA snapshots serialize accessible names into quoted YAML strings:
-  // the renderer JSON-stringifies the name (escaping quotes and
-  // backslashes) and then YAML-quotes the assembled value (doubling
-  // single quotes). Playwright composes both, so the composed form is a
-  // variant; the individual forms cover other serializers.
-  const ariaName = secret.replace(/(["\\])/g, "\\$1");
-  variants.add(ariaName);
-  variants.add(ariaName.replace(/'/g, "''"));
-  variants.add(secret.replace(/'/g, "''"));
+export function makeRedactor(secrets: string | string[]): Redactor {
+  const secretList = Array.isArray(secrets) ? secrets : [secrets];
+  const variants = new Set<string>();
+  for (const secret of secretList) {
+    variants.add(secret);
+    // Percent encodings: encodeURIComponent (both hex cases) and the stricter
+    // application/x-www-form-urlencoded serialization (space becomes +, more
+    // punctuation is escaped), which is what URLSearchParams and form submits
+    // produce.
+    const pct = encodeURIComponent(secret);
+    variants.add(pct);
+    variants.add(pct.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
+    variants.add(new URLSearchParams({ x: secret }).toString().slice(2));
+    // Servers and proxies sometimes lowercase the percent hex; match that form.
+    variants.add(new URLSearchParams({ x: secret }).toString().slice(2).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
+    // HTML entity encodings: the full named-attribute form, the partial
+    // serializations real DOM APIs produce (textContent escapes only & and <;
+    // attribute serialization escapes & < > " '), and numeric references.
+    const named: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+    const esc = (chars: string) => secret.replace(new RegExp(`[${chars.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}]`, "g"), (c) => named[c]);
+    variants.add(esc("&"));
+    variants.add(esc("&<"));
+    variants.add(esc('&<>"\''));
+    variants.add(Array.from(secret, (c) => `&#${c.codePointAt(0)!};`).join(""));
+    variants.add(Array.from(secret, (c) => `&#x${c.codePointAt(0)!.toString(16)};`).join(""));
+    // Markdown: Turndown escapes its special characters with a backslash, so
+    // a secret containing one comes back as `ab\*cd` in markdown output.
+    variants.add(secret.replace(/([\\`*_[\]])/g, "\\$1"));
+    // ARIA snapshots serialize accessible names into quoted YAML strings:
+    // the renderer JSON-stringifies the name (escaping quotes and
+    // backslashes) and then YAML-quotes the assembled value (doubling
+    // single quotes). Playwright composes both, so the composed form is a
+    // variant; the individual forms cover other serializers.
+    const ariaName = secret.replace(/(["\\])/g, "\\$1");
+    variants.add(ariaName);
+    variants.add(ariaName.replace(/'/g, "''"));
+    variants.add(secret.replace(/'/g, "''"));
+  }
   // Page-side pipelines normalize before we see the string: label resolution
   // collapses runs and trims, excerpts collapse, option labels trim, and
   // accessible-name computation strips zero-width characters. The normalized
