@@ -1144,6 +1144,7 @@ test("detectBotProtection: overlapping block phrases count once, not twice", () 
   // visual phrase is one marker, so this single line alone stays undetected.
   const overlap = detectBotProtection({ title: "Access denied", excerpt: "Sorry, you have been blocked" });
   assert.equal(overlap, null);
+});
 
 test("resolveCookies defaults to a host-only cookie with hardening attributes", () => {
   assert.deepEqual(resolveCookies(undefined, "https://example.com/a"), []);

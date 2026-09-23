@@ -1293,6 +1293,9 @@ test("bot protection: brand evidence past the short body slice still stops the r
     assert.equal(body.steps.length, 0);
   } finally {
     site.close();
+  }
+});
+
 // ── Cookie seeding (PR #9): gated fixture, reference-based ingress, redaction ──
 
 // Two cookie values where the shorter is a strict prefix of the longer, so the
