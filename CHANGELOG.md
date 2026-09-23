@@ -4,7 +4,7 @@
 
 - Transport drivers: the four judgment transports (TypeSafe, OpenRouter, Cloudflare, Vercel) are now run-bound drivers behind one registry. Typing providers are unchanged.
 - An unknown `JEV_PROVIDER` now errors instead of silently falling through to auto-detection; the no-provider diagnostic names all four credential sets.
-- Every answer is validated at a shared boundary before tokens are credited or an action executes: missing or malformed answers error the run, and transport errors no longer include raw response bodies.
+- Every answer is validated at a shared boundary before tokens are credited or an action executes: missing or malformed answers error the run, and transport errors from built-in providers no longer include raw response bodies.
 - Removed the select-option fallback to the first option; a malformed option judgment errors the run without selecting anything.
 - Library callers can inject a transport with `NavigateOptions.transport`; results report its name and effective model. `est_cost_usd` stays a Jev-token estimate.
 

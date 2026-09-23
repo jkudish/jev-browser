@@ -25,6 +25,9 @@ jobs:
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: npx playwright install --with-deps chromium
+      - name: Transport integration (optional)
+        if: env.TYPESAFE_API_KEY != ''
+        run: node --test test/transports.test.mjs
       - name: End-to-end (optional)
         if: env.TYPESAFE_API_KEY != ''
         env:
