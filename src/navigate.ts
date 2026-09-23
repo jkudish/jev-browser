@@ -33,6 +33,7 @@ import {
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
 import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
+import { askJev as askProvider, InvalidJevAnswer, resolveTransport, type JevTransport, type JevAnswer } from "./provider.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
@@ -46,6 +47,8 @@ export interface NavigateOptions {
   startUrl?: string;
   /** Reuse an existing Playwright page instead of launching a new browser. */
   page?: Page;
+  /** Override judgment transport for this run, independent of JEV_PROVIDER and credentials. */
+  transport?: JevTransport;
   maxSteps?: number;
   maxSeconds?: number;
   allowTyping?: boolean;
@@ -108,10 +111,9 @@ const DEFAULT_CAPS: Record<string, number> = {
 const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });
 turndown.use(gfm.gfm);
 
-import { askJev as askProvider, type JevProvider } from "./provider.js";
-
 interface RunBudget {
   usage: JevUsage;
+  transport: JevTransport;
   signal: AbortSignal;
   deadlineAt: number; // performance.now() milliseconds
   // Per-run model/provider state: resolved inside navigate() and mutated only
@@ -119,11 +121,11 @@ interface RunBudget {
   // provider and a failed run cannot inherit values from a previous one.
   requestedModel: string;
   model: string; // model reported by the most recent Jev call
-  provider: JevProvider | null;
+  provider: string | null;
 }
 
 async function askJev(budget: RunBudget, state: unknown, questions: Record<string, unknown>) {
-  const result = await askProvider(state, questions, budget.requestedModel, budget.signal);
+  const result = await askProvider(budget.transport, { state, questions, model: budget.requestedModel, signal: budget.signal });
   budget.provider = result.provider;
   budget.model = result.model;
   budget.usage.jev_calls += 1;
@@ -496,6 +498,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // another provider. Runs with typing disabled ignore typing config at all,
   // so a broken config can always be worked around with allowTyping: false.
   const typingGenerator = allowTyping ? createTypingGenerator() : null;
+  const transport = options.transport ?? resolveTransport();
 
   // One abort source per run: the wall-clock deadline, optionally composed
   // with caller cancellation (the MCP layer forwards its signal).
@@ -510,6 +513,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   const requestedModel = process.env.JEV_BROWSER_MODEL ?? "jev-latest";
   const budget: RunBudget = {
     usage: { jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 },
+    transport,
     signal: controller.signal,
     deadlineAt,
     requestedModel,
@@ -759,7 +763,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         history,
       };
       const answers = await askJev(budget, state, stepQuestions(buildCriteria(elements)));
-      const actionAnswer = answers.action;
+      const actionAnswer = answers.action as Extract<JevAnswer, { type: "choice" }>;
       const proposed: string = actionAnswer.choice;
       const probabilities: Record<string, number> = actionAnswer.probabilities ?? {};
       const base = {
@@ -768,8 +772,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         proposed_action: proposed,
         confidence: actionAnswer.confidence ?? null,
         top_probability: probabilities[proposed] ?? null,
-        goal_done: answers.goal_done.noul,
-        stuck: answers.stuck.noul,
+        goal_done: (answers.goal_done as Extract<JevAnswer, { type: "noul" }>).noul,
+        stuck: (answers.stuck as Extract<JevAnswer, { type: "noul" }>).noul,
       };
 
       // Stop gates run BEFORE execution: a watcher that fires on the current
@@ -779,12 +783,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         status = "done";
         break;
       }
-      if (answers.goal_done.noul > 0.85) {
+      if ((answers.goal_done as Extract<JevAnswer, { type: "noul" }>).noul > 0.85) {
         steps.push({ ...base, executed_action: null, detail: "goal watcher fired; proposed action not executed", outcome: "goal watcher fired before acting" });
         status = "goal_achieved";
         break;
       }
-      if (answers.stuck.noul > 0.85 && step > 2) {
+      if ((answers.stuck as Extract<JevAnswer, { type: "noul" }>).noul > 0.85 && step > 2) {
         steps.push({ ...base, executed_action: null, detail: "stuck watcher fired; proposed action not executed", outcome: "stuck watcher fired before acting" });
         status = "stuck";
         break;
@@ -904,9 +908,13 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
               budget,
               { task: safeTask, page: { url: R(observables.url), title: R(observables.title) }, dropdown: element.description, options: opts.map((o) => o.label) },
               { option: selectOptionQuestion(element.description, opts.map((o) => o.label)) },
-            );
-            const pickedIndex = Number((optionAnswer.option.choice as string).slice(1));
-            const opt = opts[pickedIndex] ?? opts[0];
+            ).catch((error) => {
+              if (budget.signal.aborted) throw budget.signal.reason;
+              if (error instanceof InvalidJevAnswer) throw error;
+              throw new InvalidJevAnswer(`Jev provider ${budget.transport.name} question option: request failed`);
+            });
+            const pickedIndex = Number((optionAnswer.option as Extract<JevAnswer, { type: "choice" }>).choice.slice(1));
+            const opt = opts[pickedIndex];
             await page.selectOption(selectorFor(element), { index: opt.i }, { timeout: bounded(4_000) });
             detail = `selected "${opt.label}"`;
           }
@@ -958,6 +966,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         }
       } catch (error) {
         if (controller.signal.aborted) throw error; // deadline/cancellation propagates
+        if (error instanceof InvalidJevAnswer) throw error; // malformed second-stage answer is a run error, never an action fallback
         actionError = R((error as Error).message).slice(0, 160);
       }
 
