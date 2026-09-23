@@ -29,7 +29,7 @@ Full-resolution video: [assets/github-demo.mp4](assets/github-demo.mp4).
 
 ## Install
 
-Requires Node.js 22 or newer, a TypeSafe API key from [console.typesafe.ai/settings/keys](https://console.typesafe.ai/settings/keys), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
+Requires Node.js 22 or newer, an API key for a Jev transport ([TypeSafe direct](https://console.typesafe.ai/settings/keys) is the default; alternatives are listed under [Configuration](#configuration)), and optionally a key for a typing provider (see [the typing model](#the-typing-model)). Playwright's Chromium downloads automatically on install; set `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD=1` to opt out.
 
 ### Let an agent install it for you
 

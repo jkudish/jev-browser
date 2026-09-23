@@ -10,7 +10,7 @@ npm run build
 npm run typecheck
 ```
 
-Node.js 20 or newer. TypeScript, ESM. Playwright drives the browser; the Vercel AI SDK drives the typing generator (any provider); the TypeSafe SDK drives Jev.
+Node.js 22 or newer. TypeScript, ESM. Playwright drives the browser; the Vercel AI SDK drives the typing generator (any provider); the TypeSafe SDK drives Jev.
 
 ## Tests
 
