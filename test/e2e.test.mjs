@@ -395,22 +395,22 @@ async function serveFixture(name) {
   return { origin: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
 }
 
-function assertNoSecret(result, body) {
+function assertNoSecret(result, body, secret = SECRET) {
   const haystack = JSON.stringify(body) + JSON.stringify(result.content ?? []);
   // Raw plus the encodings a page realistically echoes back: percent,
   // form-URL-encoded, and the partial/full HTML-entity serializations.
   const echoes = [
-    SECRET,
-    encodeURIComponent(SECRET),
-    new URLSearchParams({ x: SECRET }).toString().slice(2),
-    SECRET.replace(/&/g, "&amp;"),
-    SECRET.replace(/([&<>"'])/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c),
+    secret,
+    encodeURIComponent(secret),
+    new URLSearchParams({ x: secret }).toString().slice(2),
+    secret.replace(/&/g, "&amp;"),
+    secret.replace(/([&<>"'])/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c),
     // aria snapshots: the renderer JSON-escapes quotes and backslashes, then
     // YAML single-quote-doubles the assembled value. Both stages compose, so
     // assert each stage alone and the composed form.
-    SECRET.replace(/'/g, "''"),
-    SECRET.replace(/(["\\])/g, "\\$1"),
-    SECRET.replace(/(["\\])/g, "\\$1").replace(/'/g, "''"),
+    secret.replace(/'/g, "''"),
+    secret.replace(/(["\\])/g, "\\$1"),
+    secret.replace(/(["\\])/g, "\\$1").replace(/'/g, "''"),
   ];
   for (const echo of echoes) {
     assert.ok(!haystack.includes(echo), `the password leaked into the tool result (${echo === SECRET ? "raw" : "encoded"})`);
@@ -1293,5 +1293,339 @@ test("bot protection: brand evidence past the short body slice still stops the r
     assert.equal(body.steps.length, 0);
   } finally {
     site.close();
+// ── Cookie seeding (PR #9): gated fixture, reference-based ingress, redaction ──
+
+// Two cookie values where the shorter is a strict prefix of the longer, so the
+// live run exercises the multi-secret, longest-first redaction path. The long
+// one gates the site; both are seeded.
+const COOKIE_LONG = "e2e c'o{o&kie=1";
+const COOKIE_SHORT = "e2e c'o";
+
+// A site that only authenticates via the seeded session cookie: every private
+// document request without it is redirected to /signin, and the authenticated
+// order page echoes the value back the way a hostile page would (visible text,
+// an aria-label, console.error), so the tests can prove every echo redacts.
+async function startCookieSite() {
+  let unauthorizedDocuments = 0;
+  let documentCookie = "";
+  const hasSession = (cookie) => cookie.split(";").some((part) => part.trim() === "session=" + COOKIE_LONG);
+  const esc = (v) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const page = (title, body) =>
+    `<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1>${body}</body></html>`;
+  const order = (id) => {
+    const jsEcho = JSON.stringify(`echo: ${COOKIE_LONG}`);
+    return page(
+      `Order ${id}`,
+      `<p>Order ${id} confirmed</p>` +
+        `<p id="mirror">mirror: ${esc(COOKIE_LONG)}</p>` +
+        `<a id="mirror-link" href="/order/${id}" aria-label="${esc(COOKIE_LONG)}">mirror</a>` +
+        `<script>console.error(${jsEcho})</script>`,
+    );
+  };
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    if (!/^\/(private|order)/.test(url.pathname)) {
+      res.end(page("Welcome", `<p>Public landing page</p>`));
+      return;
+    }
+    documentCookie = req.headers.cookie ?? "";
+    if (!hasSession(documentCookie)) {
+      unauthorizedDocuments += 1;
+      res.statusCode = 302;
+      res.setHeader("location", "/signin");
+      res.end(page("Sign in required", `<p>Sign in required</p>`));
+      return;
+    }
+    if (url.pathname.startsWith("/order/")) {
+      res.end(order(url.pathname.split("/")[2]));
+      return;
+    }
+    res.end(
+      page(
+        "Your orders",
+        `<ul><li><a href="/order/1041">Order 1041</a></li><li><a href="/order/1042">Order 1042 (newest)</a></li></ul>`,
+      ),
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    get unauthorizedDocuments() {
+      return unauthorizedDocuments;
+    },
+    get documentCookie() {
+      return documentCookie;
+    },
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+test("cookie seeding: handoff file consumed, gated page reached, echo redacted", { skip: !hasKey }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-cookie-e2e-"));
+  await chmod(dir, 0o700);
+  const sessionFile = join(dir, "session.e2e");
+  const prefsFile = join(dir, "prefs.e2e");
+  await writeFile(sessionFile, COOKIE_LONG, { mode: 0o600 });
+  await writeFile(prefsFile, COOKIE_SHORT, { mode: 0o600 });
+  const site = await startCookieSite();
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Open the newest order and stop on it",
+              start_url: `${site.baseUrl}/private`,
+              max_steps: 5,
+              max_seconds: 60,
+              cookie_file: [
+                { name: "session", file: sessionFile },
+                { name: "prefs", file: prefsFile },
+              ],
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        // The agent got past the gate and completed the task.
+        assert.match(body.final_url, /\/order\/1042/);
+        assert.ok(body.page.content.includes("Order 1042 confirmed"), "the gated order page should be the final page");
+        // The site never saw a private document without the cookie.
+        assert.equal(site.unauthorizedDocuments, 0, "the fixture saw a private document without the cookie");
+        // The cookie header carries the raw value exactly as seeded.
+        assert.ok(site.documentCookie.includes("session=" + COOKIE_LONG), "the server must receive the seeded session cookie");
+        // Credential treatment: screenshot suppressed from run start, with the
+        // reason reported and no image block attached.
+        assert.equal(body.screenshot_suppressed, "credential-fill");
+        // The MCP layer strips screenshot_base64_jpeg and attaches it as an
+        // image block only when present; on credential runs there must be none.
+        assert.ok(!result.content.some((b) => b.type === "image"), "screenshot must be suppressed on cookie runs");
+        // Every reflection of the value comes back redacted: payload, aria
+        // attribute, and the captured console event.
+        assert.ok(body.page.content.includes("mirror: [REDACTED]"), "a reflected echo must be redacted in the payload");
+        const echo = (body.console_events ?? []).find((e) => e.type === "console_error");
+        assert.ok(echo, "the fixture's console.error echo should be captured");
+        assert.match(echo.text, /echo: \[REDACTED\]/);
+        // Both seeded values, in every encoding, stay out of the whole result.
+        assertNoSecret(result, body, COOKIE_LONG);
+        assertNoSecret(result, body, COOKIE_SHORT);
+      },
+      { JEV_BROWSER_HANDOFF_DIR: dir },
+    );
+    // One-shot handoff: both files were consumed at run start.
+    await assert.rejects(() => stat(sessionFile), /ENOENT/);
+    await assert.rejects(() => stat(prefsFile), /ENOENT/);
+  } finally {
+    await site.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("cookie seeding: cookie_env delivery works under the same guards", { skip: !hasKey }, async () => {
+  const site = await startCookieSite();
+  try {
+    await withClient(
+      async (client) => {
+        const result = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: {
+              task: "Open the newest order and stop on it",
+              start_url: `${site.baseUrl}/private`,
+              max_steps: 5,
+              max_seconds: 60,
+              cookie_env: [
+                { name: "session", env: "JEV_COOKIE_SESSION" },
+                { name: "prefs", env: "JEV_COOKIE_PREFS" },
+              ],
+            },
+          },
+          undefined,
+          { timeout: 120_000 },
+        );
+        const body = payload(result);
+        assert.match(body.final_url, /\/order\/1042/);
+        assert.equal(body.screenshot_suppressed, "credential-fill");
+        assert.ok(!result.content.some((b) => b.type === "image"), "screenshot must be suppressed on cookie runs");
+        assert.equal(site.unauthorizedDocuments, 0);
+        assertNoSecret(result, body, COOKIE_LONG);
+        assertNoSecret(result, body, COOKIE_SHORT);
+      },
+      { JEV_COOKIE_SESSION: COOKIE_LONG, JEV_COOKIE_PREFS: COOKIE_SHORT },
+    );
+  } finally {
+    await site.close();
+  }
+});
+
+test("cookie seeding: bad ingress is refused loudly, before any browser", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-cookie-e2e-"));
+  await chmod(dir, 0o700);
+  const good = join(dir, "good.e2e");
+  await writeFile(good, COOKIE_LONG, { mode: 0o600 });
+  try {
+    await withClient(
+      async (client) => {
+        const cases = [
+          // A value reference must be operator-opted-in: only JEV_COOKIE_*
+          // names are ever looked up.
+          [{ task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "SESSION" }] }, /must name a JEV_COOKIE_\* variable/],
+          // File and env ingress are alternatives, not a mix.
+          [
+            { task: "x", start_url: "https://example.com/", cookie_file: [{ name: "session", file: good }], cookie_env: [{ name: "prefs", env: "JEV_COOKIE_PREFS" }] },
+            /at most one of cookie_file and cookie_env/,
+          ],
+          // Two cookies with the same name would fight in the jar.
+          [
+            { task: "x", start_url: "https://example.com/", cookie_file: [{ name: "session", file: good }, { name: "session", file: good }] },
+            /cookie names must be unique/,
+          ],
+          // Handoff files live inside the handoff directory, like password_file.
+          [{ task: "x", start_url: "https://example.com/", cookie_file: [{ name: "session", file: "/etc/passwd" }] }, /inside the handoff directory/],
+          // Values are validated like passwords before any run starts.
+          [{ task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "JEV_COOKIE_SHORT" }] }, /cookie "session" is shorter than/],
+        ];
+        for (const [args, pattern] of cases) {
+          const rejected = await client.callTool({ name: "jev_navigate", arguments: args }, undefined, { timeout: 30_000 });
+          assert.equal(rejected.isError, true, JSON.stringify(args));
+          assert.match(rejected.content.find((b) => b.type === "text").text, pattern);
+        }
+      },
+      { JEV_BROWSER_HANDOFF_DIR: dir, JEV_COOKIE_SESSION: COOKIE_LONG, JEV_COOKIE_SHORT: "abc", JEV_COOKIE_PREFS: COOKIE_SHORT },
+    );
+    // Playwright debug output would bypass the redaction layer; cookie runs
+    // inherit the password run's refusal, in its own environment.
+    await withClient(
+      async (client) => {
+        const debugged = await client.callTool(
+          {
+            name: "jev_navigate",
+            arguments: { task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "JEV_COOKIE_SESSION" }] },
+          },
+          undefined,
+          { timeout: 30_000 },
+        );
+        assert.equal(debugged.isError, true);
+        assert.match(debugged.content.find((b) => b.type === "text").text, /PWDEBUG/);
+      },
+      { JEV_COOKIE_SESSION: COOKIE_LONG, PWDEBUG: "1" },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("cookie seeding: an injected page is refused before it is touched", async () => {
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    // A real caller-owned page: the refusal must fire before addCookies can
+    // mutate the caller's context, and the page must survive untouched.
+    await assert.rejects(
+      () =>
+        navigate({
+          task: "x",
+          page,
+          startUrl: "https://example.com",
+          cookies: [{ name: "session", value: COOKIE_LONG }],
+        }),
+      /seed cookies are refused on runs with an injected page/,
+    );
+    const cookies = await context.cookies();
+    assert.equal(cookies.length, 0, "the caller's context must not gain cookies");
+    assert.equal(page.isClosed(), false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("CLI: --cookie-file seeds from a file and never puts the value in argv or output", { skip: !hasKey }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-cookie-cli-"));
+  const sessionFile = join(dir, "session.cli");
+  const prefsFile = join(dir, "prefs.cli");
+  // Trailing newline exercises the strip.
+  await writeFile(sessionFile, COOKIE_LONG + "\n");
+  await writeFile(prefsFile, COOKIE_SHORT + "\n");
+  const site = await startCookieSite();
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        serverPath, "run",
+        "Open the newest order and stop on it", `${site.baseUrl}/private`,
+        "--cookie-file", `session=@${sessionFile}`,
+        "--cookie-file", `prefs=@${prefsFile}`,
+        "--max-steps", "5",
+        "--max-seconds", "60",
+      ],
+      { env: { ...process.env } },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 0, `stderr: ${stderr}`);
+    const body = JSON.parse(stdout);
+    assert.match(body.final_url, /\/order\/1042/);
+    assert.equal(body.screenshot_suppressed, "credential-fill");
+    assert.ok(!stdout.includes(COOKIE_LONG) && !stdout.includes(encodeURIComponent(COOKIE_LONG)), "the cookie value leaked into CLI output");
+    assert.ok(!stderr.includes(COOKIE_LONG), "the cookie value leaked into CLI stderr");
+    assert.equal(site.unauthorizedDocuments, 0);
+  } finally {
+    await site.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: recording is refused on cookie runs before any browser is armed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "jev-cookie-cli-"));
+  const sessionFile = join(dir, "session.cli");
+  await writeFile(sessionFile, COOKIE_LONG);
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        serverPath, "run",
+        "x", "https://example.com/",
+        "--cookie-file", `session=@${sessionFile}`,
+        "--record", "/tmp/jev-unused.webm",
+      ],
+      { env: { ...process.env, TYPESAFE_API_KEY: "" } },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.notEqual(code, 0, `expected a nonzero exit, stderr: ${stderr}`);
+    // The CLI credential block refuses recording before the secret file is
+    // even opened, mirroring the password-run refusal.
+    assert.match(stderr, /cookie source: --record is refused on runs with --cookie-file/);
+    assert.ok(!stderr.includes(COOKIE_LONG), "the refusal must not quote the value");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: malformed --cookie-file arguments fail without echoing the argument", async () => {
+  // A user who pastes the raw value where the @path belongs, or drops the
+  // name= entirely, must get a one-line error that never repeats what they
+  // typed: that text goes to stderr and into shell history-adjacent logs.
+  const RAW = "unit-pasted-raw-token-xyz";
+  for (const spec of [`session=${RAW}`, RAW]) {
+    const child = spawn(
+      process.execPath,
+      [serverPath, "run", "x", "https://example.com/", "--cookie-file", spec],
+      { env: { ...process.env, TYPESAFE_API_KEY: "" } },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.notEqual(code, 0, `expected a nonzero exit for ${spec.includes("=") ? "name=value" : "bare"} misuse, stderr: ${stderr}`);
+    assert.ok(!stderr.includes(RAW), `the malformed spec leaked back to stderr: ${stderr}`);
+    assert.ok(!stderr.trimEnd().includes("\n"), `errors must stay one line: ${JSON.stringify(stderr)}`);
   }
 });

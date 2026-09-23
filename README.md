@@ -123,7 +123,14 @@ The same agent runs from the command line. Result JSON is printed to stdout.
 npx -y @jkudish/jev-browser run "Find the newest release and stop on it" https://github.com/jkudish/jev-browser/releases
 ```
 
-CLI options include `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, and `--record path.webm` (or a directory for Playwright's raw output). Run with `--help` for the full list.
+CLI options include `--format`, `--max-chars`, `--max-steps`, `--max-seconds`, `--no-typing`, `--screenshot path.jpg`, `--record path.webm` (or a directory for Playwright's raw output), and `--cookie-file name=@path` to start behind a login. Run with `--help` for the full list.
+
+There are two ways onto an authenticated page: the [password fill](#password-fill-logins) (the agent types nothing; code fills the field) and seed cookies (the run starts already logged in). The agent never types into password fields, so pick one of those two. For cookies, the value is read from a file so a session token never appears in argv, shell history, or the process list; there is deliberately no `--cookie name=value` flag.
+
+```bash
+npx -y @jkudish/jev-browser run "Open the newest order and stop on it" https://app.example.com/orders \
+  --cookie-file "session=@$HOME/.cache/example-session"
+```
 
 Or import it as a library. The package entry exports `navigate` side-effect free: importing it starts no server and no browser until you call it.
 
@@ -135,6 +142,7 @@ const result = await navigate({
   startUrl: "https://example.com/pricing",
   format: "markdown",
   maxSteps: 16,
+  cookies: [{ name: "session", value: process.env.EXAMPLE_SESSION }], // optional seed cookie; see "Seed cookies" below
 });
 
 if ("error" in result) throw new Error(result.error);
@@ -210,6 +218,55 @@ Rules and limits of the mechanism, stated plainly:
 - Every password field the model fills in a run receives the same configured value; this is for logging in, not for setting new passwords. `allow_typing: false` disables the feature entirely.
 
 
+## Seed cookies (start behind a login)
+
+Seed cookies put a session captured elsewhere (a browser profile, a login script, your secret manager) into the run's browser context before the first navigation, so the run starts already logged in. Password fill and seed cookies are the two supported ways onto an authenticated page; the agent never types into password fields itself.
+
+Cookie values are credentials of the same rank as the password value:
+
+- They never enter arguments the model composes. The CLI reads values from files (`--cookie-file name=@path`, repeatable); the MCP tool reads them from one-shot handoff files (`cookie_file`) or `JEV_COOKIE_*` environment variables (`cookie_env`), exactly the reference-based delivery the password uses. Library callers pass `cookies: [{ name, value }]` in the `navigate()` options, like `password: { value, origin }`.
+- Every value is redacted from all model-facing state, traces, errors, console events, and the result payload, with the same machinery the password uses (raw, percent-encoded, form-encoded, HTML-entity, markdown-escaped, and aria-YAML-escaped echoes). With several cookies, or a cookie plus a password, every value redacts, longest first.
+- Video recording is refused, and the final screenshot is suppressed from run start: the very first rendered page can already reflect a cookie value into pixels, and frames cannot be redacted.
+- Runs with an injected `page` are refused: `addCookies` would mutate a context your application owns.
+- Values are validated like passwords: a run refuses a value that is empty, longer than 4096 bytes, shorter than 4 characters, or containing control characters (which no serializer could echo back redactably).
+
+What a seed cookie gets when you supply only a name and a value:
+
+| Field | Default | Why |
+| --- | --- | --- |
+| `domain` | none (host-only) | The cookie binds to the start URL's exact host and never matches subdomains, which is what a session cookie captured in a browser usually is. Supply `.example.com` (leading dot) only when the site really sets a subdomain-matching cookie. `__Host-` names must stay host-only and are rejected with an explicit domain. |
+| `path` | `/` | Sent site-wide, not just under the start URL's directory. `__Host-` names require it. |
+| `secure` | true on https start URLs | Browsers refuse session cookies over plain http otherwise; loopback http fixtures still seed. Forced true for `__Host-` and `__Secure-` names and for `sameSite: "None"`; an explicit `secure: false` cannot strip the forced flag. |
+| `httpOnly` | true | Page scripts cannot read the seeded value; the server still receives it on every request. Set `httpOnly: false` only when the site's own JavaScript must read this cookie. |
+| `sameSite` | `Lax` | The browser default for session cookies. |
+
+```bash
+# CLI: value from a file, one flag per cookie
+npx -y @jkudish/jev-browser run "Open the newest order and stop on it" https://app.example.com/orders \
+  --cookie-file "session=@$HOME/.cache/example-session"
+```
+
+```jsonc
+// MCP arguments: one-shot file inside the handoff directory, consumed and
+// deleted at run start, exactly like password_file
+{
+  "task": "Open the newest order and stop on it",
+  "start_url": "https://app.example.com/orders",
+  "cookie_file": [{ "name": "session", "file": "/home/you/.jev-browser/handoff/session.12345" }]
+}
+```
+
+```bash
+# MCP: environment variable opt-in, exactly like password_env
+JEV_COOKIE_SESSION="$(cat ~/.cache/example-session)"
+```
+
+```jsonc
+{ "task": "Open the newest order and stop on it", "start_url": "https://app.example.com/orders",
+  "cookie_env": [{ "name": "session", "env": "JEV_COOKIE_SESSION" }] }
+```
+
+
 ## Reuse an existing Playwright page
 
 Pass an existing Playwright `Page` when the browser, context, or session is owned by your application. This is useful for logged-in sessions and for applications that already manage the browser lifecycle. When `page` is supplied, `startUrl` is optional; if both are supplied, navigation starts by going to `startUrl`. Jev Browser never closes the injected page, context, or browser.
@@ -274,7 +331,7 @@ Every run makes paid TypeSafe API calls, typically a fraction of a cent, plus on
 }
 ```
 
-Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing` (default true), `format` (`text`, `markdown`, `html`, `aria`), `max_chars` (override the cap), `screenshot` (`final`, default, or `none`).
+Parameters: `max_steps` (default 24), `max_seconds` (default 180), `allow_typing` (default true), `format` (`text`, `markdown`, `html`, `aria`), `max_chars` (override the cap), `screenshot` (`final`, default, or `none`), `cookie_file` / `cookie_env` (seed cookies by reference: handoff-file paths or `JEV_COOKIE_*` names, plus optional `domain`/`path`/`secure`/`httpOnly`/`sameSite`; see [Seed cookies](#seed-cookies-start-behind-a-login)).
 
 ## What you get back
 
@@ -341,7 +398,7 @@ With no provider at all, or when the typing model fails or returns empty text, t
 
 - Up to 240 elements per step; Jev's Choice supports 255 options. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages.
 - The markdown format converts the whole body, so it carries navigation chrome and can include inline script text; a readability pass is a candidate improvement, not a committed one.
-- Password fields are only ever filled by code, never typed by the model, and only when a password source is configured (see [Password fill](#password-fill-logins)); file inputs are never offered. Hover-revealed menus, keyboard actions other than Enter within the explicit search and submit actions (Escape, Tab, arrow keys), shadow DOM, and iframes are out of scope for v0.1.
+- Password fields are only ever filled by code, never typed by the model, and only when a password source is configured (see [Password fill](#password-fill-logins)); file inputs are never offered. Start behind a login with [seed cookies](#seed-cookies-start-behind-a-login) (`cookies` on `navigate()`, `--cookie-file` on the CLI, `cookie_file`/`cookie_env` on MCP). Hover-revealed menus, keyboard actions other than Enter within the explicit search and submit actions (Escape, Tab, arrow keys), shadow DOM, and iframes are out of scope for v0.1.
 - Thresholds (0.85 goal, 0.85 stuck, budgets) are starting points measured on Wikipedia and DuckDuckGo tasks. Tune them for your sites.
 - Jev is calibrated, not infallible. Treat the trace as evidence, not proof.
 

@@ -513,3 +513,108 @@ export function detectBotProtection(signals: BotProtectionSignals): BotProtectio
     from_page: pageDecisive,
   };
 }
+// ── Seed cookies ─────────────────────────────────────────────────────────────
+
+/** A cookie to seed the browser context with before the first navigation. */
+export interface SeedCookie {
+  name: string;
+  value: string;
+  /**
+   * Omit (recommended): the cookie is host-only, bound to the start URL's
+   * exact host and no subdomain, which is what a session cookie captured in
+   * a browser usually is. Supply ".example.com" (leading dot) only when the
+   * site genuinely sets a subdomain-matching domain cookie.
+   */
+  domain?: string;
+  /** Defaults to "/" so the cookie is sent site-wide. */
+  path?: string;
+  /**
+   * Defaults to true for https start URLs, false for http (loopback
+   * fixtures stay seedable). Forced true for __Host-/__Secure- names and
+   * for sameSite "None"; an explicit false cannot strip a forced flag.
+   */
+  secure?: boolean;
+  /**
+   * Defaults to true: page scripts cannot read the seeded value. Set false
+   * only when the site's own JavaScript must read this cookie.
+   */
+  httpOnly?: boolean;
+  /** Defaults to "Lax", the browser default for session cookies. */
+  sameSite?: "Strict" | "Lax" | "None";
+}
+
+/**
+ * Resolves seed cookies into Playwright's `addCookies` shape.
+ *
+ * What a caller gets when a field is omitted:
+ * - domain: omitted from the output decision and sent as the start URL's
+ *   hostname without a leading dot, which Chromium stores host-only (the
+ *   cookie matches the exact host, never subdomains). A supplied domain is
+ *   passed through verbatim; only a leading dot opts into subdomain matching.
+ * - path: "/".
+ * - secure: true when the start URL is https, false otherwise; forced true
+ *   for __Host- and __Secure- names regardless of scheme, and for
+ *   sameSite "None"; an explicit secure: false cannot strip a forced flag.
+ * - httpOnly: true. Page scripts cannot read the value; the server still
+ *   receives it on every request.
+ * - sameSite: "Lax".
+ *
+ * __Host- names must be host-only with path "/" and secure: an explicit
+ * domain or a non-root path on such a name is rejected, because the browser
+ * would drop the cookie anyway.
+ */
+export function resolveCookies(
+  cookies: SeedCookie[] | undefined,
+  startUrl: string,
+): Array<{ name: string; value: string; domain: string; path: string; secure: boolean; httpOnly: boolean; sameSite: "Strict" | "Lax" | "None" }> {
+  if (!cookies?.length) return [];
+  let url: URL;
+  try {
+    url = new URL(startUrl);
+  } catch {
+    throw new Error(`seed cookies need a valid start URL, got: ${JSON.stringify(startUrl)}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`seed cookies need an http(s) start URL, got: ${JSON.stringify(startUrl)}`);
+  }
+  return cookies.map((c) => {
+    // The error describes the problem without quoting the cookie: the value
+    // is a secret, and this throws before the run's redactor exists.
+    if (!c.name || typeof c.value !== "string" || c.value === "") {
+      const nameState = c.name ? "ok" : "missing";
+      const valueState = typeof c.value === "string" ? (c.value === "" ? "empty" : "ok") : `not a string (${typeof c.value})`;
+      throw new Error(`cookie needs a name and a value (name: ${nameState}, value: ${valueState})`);
+    }
+    const prefixed = c.name.startsWith("__Host-") || c.name.startsWith("__Secure-");
+    if (c.name.startsWith("__Host-")) {
+      if (c.domain !== undefined) throw new Error(`__Host- cookie "${c.name}" must stay host-only; omit domain (it binds to the start URL's exact host)`);
+      if (c.path !== undefined && c.path !== "/") throw new Error(`__Host- cookie "${c.name}" requires path "/", got: ${JSON.stringify(c.path)}`);
+    }
+    return {
+      name: c.name,
+      value: c.value,
+      // Dotless domain through Playwright's addCookies: Chromium stores this
+      // host-only (an exact-host match, no subdomains), which is the safe
+      // default; a leading dot from the caller opts into subdomain matching.
+      domain: c.domain ?? url.hostname,
+      path: c.path ?? "/",
+      // Forced security dominates the caller: __Host- and __Secure- names
+      // and SameSite=None cookies are invalid without the Secure attribute,
+      // so an explicit secure: false cannot strip it.
+      secure: prefixed || c.sameSite === "None" ? true : (c.secure ?? url.protocol === "https:"),
+      httpOnly: c.httpOnly ?? true,
+      sameSite: c.sameSite ?? "Lax",
+    };
+  });
+}
+
+/** Parses a CLI `name=value` cookie spec. The value may itself contain `=`. */
+export function parseCookieSpec(spec: string): SeedCookie {
+  const eq = spec.indexOf("=");
+  // The argument is never quoted back: the part after "=" may be a value a
+  // user pasted by mistake, and an error echoing it would leak the secret to
+  // stderr exactly where the flag was designed to keep it out of.
+  if (eq <= 0) throw new Error("cookie expects name=value");
+  return { name: spec.slice(0, eq), value: spec.slice(eq + 1) };
+}
+

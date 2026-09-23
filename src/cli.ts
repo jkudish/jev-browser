@@ -2,6 +2,7 @@
 // Everything else (no args) starts the MCP stdio server (src/index.ts).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { parseCookieSpec } from "./lib.js";
 import { navigate, type NavigateOptions } from "./navigate.js";
 import { assertNoPlaywrightDebug, parseTrustedOrigin, readSecretFromPath, readSecretFromStdin, validateSecretBuffer } from "./password.js";
 
@@ -11,6 +12,7 @@ interface CliArgs extends NavigateOptions {
   help?: boolean;
   passwordFile?: string;
   passwordOrigin?: string;
+  cookieFiles?: Array<{ name: string; path: string }>;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -49,6 +51,17 @@ function parseArgs(argv: string[]): CliArgs {
       case "--password-origin":
         args.passwordOrigin = argv[++i];
         break;
+      case "--cookie-file": {
+        // name=@path: the value is read later, in the credential block below,
+        // from a file (trailing newline dropped), so a session token never
+        // appears in argv, shell history, or the process list. There is
+        // deliberately no --cookie name=value form. The spec is never quoted
+        // back in errors: the part after = may be a value pasted by mistake.
+        const { name, value: ref } = parseCookieSpec(argv[++i] ?? "");
+        if (!ref.startsWith("@")) throw new Error(`--cookie-file expects name=@path for cookie "${name}"; the part after = must start with @ and name a local file, never the cookie value itself`);
+        (args.cookieFiles ??= []).push({ name, path: ref.slice(1) });
+        break;
+      }
       case "--help":
       case "-h":
         args.help = true;
@@ -71,6 +84,12 @@ Options:
   --no-typing                          Disable typing into fields
   --screenshot <path>                  Write the final JPEG to this path
   --no-screenshot                      Skip the screenshot entirely
+  --cookie-file <name=@path>           Seed a cookie before the first
+                                       navigation; the value is read from the
+                                       file so a session token stays out of
+                                       argv and shell history. Repeatable.
+                                       Host-only on the start URL's host,
+                                       httpOnly, SameSite=Lax, secure on https
   --record <path>                      Record a video of the page; a .webm path
                                        saves to that file, any other value is a
                                        directory for Playwright's output
@@ -90,7 +109,13 @@ JEV_BROWSER_* vars configure models and the typing provider.
 Without "run", this binary starts the MCP stdio server.`;
 
 export async function runCli(argv: string[]): Promise<number> {
-  const args = parseArgs(argv);
+  let args: CliArgs;
+  try {
+    args = parseArgs(argv);
+  } catch (err) {
+    console.error(`error: ${(err as Error).message}`);
+    return 1;
+  }
   if (args.help || !args.task || !args.startUrl) {
     console.log(HELP);
     return args.help ? 0 : 1;
@@ -115,7 +140,31 @@ export async function runCli(argv: string[]): Promise<number> {
     }
   }
 
-  const { screenshotPath, recordPath, passwordFile, passwordOrigin, ...navigateArgs } = args;
+  // Seed cookies are credentials of the same rank and follow the same order:
+  // recording refused, debug modes refused, and only then are the secret
+  // files opened. The files are read here, never during argument parsing,
+  // and no error ever quotes a file's contents.
+  if (args.cookieFiles?.length) {
+    try {
+      if (args.recordPath) throw new Error("--record is refused on runs with --cookie-file");
+      const names = new Set(args.cookieFiles.map((c) => c.name));
+      if (names.size !== args.cookieFiles.length) throw new Error("--cookie-file names must be unique within one run");
+      assertNoPlaywrightDebug();
+      args.cookies = await Promise.all(
+        args.cookieFiles.map(async (c) => {
+          // One trailing newline is dropped: secrets produced by `cat` and
+          // `op read` usually carry one, and it is never part of the value.
+          const text = (await readSecretFromPath(c.path)).toString("utf8").replace(/\r?\n$/, "");
+          return { name: c.name, value: validateSecretBuffer(Buffer.from(text, "utf8"), `cookie "${c.name}"`) };
+        }),
+      );
+    } catch (error) {
+      console.error(`cookie source: ${(error as Error).message}`);
+      return 2;
+    }
+  }
+
+  const { screenshotPath, recordPath, passwordFile, passwordOrigin, cookieFiles, ...navigateArgs } = args;
   let recordDir: string | undefined;
   let tempRecordDir: string | undefined;
   if (recordPath) {

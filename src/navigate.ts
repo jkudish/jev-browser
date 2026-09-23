@@ -20,7 +20,9 @@ import {
   pickAlternate,
   PRICE_PER_MTOK_IN,
   RawElement,
+  resolveCookies,
   resolveTypingSelection,
+  SeedCookie,
   selectorFor,
   summarizeTypingError,
   BotProtection,
@@ -51,15 +53,20 @@ export interface NavigateOptions {
   maxChars?: number;
   screenshot?: "final" | "none";
   recordDir?: string;
-  /**
-   * Credential run: fill native password inputs on this exact origin with this
-   * value. The value is redacted from every state, trace, error, payload, and
-   * result this function produces; recording is refused and the final
-   * screenshot is suppressed once a fill is attempted (from the start on
-   * injected pages, which may already show the value). Never source this from
-   * anything model-composed (see src/password.ts for the delivery channels).
-   */
   password?: { value: string; origin: string };
+  /**
+   * Seed cookies added to the run's own browser context before the first
+   * navigation, so a run can start behind a login the agent cannot perform
+   * itself (password fields are never typed into). Values are secrets of the
+   * same rank as the password and are redacted from every state, trace,
+   * error, payload, and result this function produces; recording is refused
+   * and the final screenshot is suppressed from run start (the page can
+   * reflect a cookie value into pixels on the very first load). Refused on
+   * runs with an injected page: addCookies would mutate a caller-owned
+   * context. Never source values from anything model-composed (the CLI and
+   * MCP adapters take file or environment references, never values).
+   */
+  cookies?: SeedCookie[];
 }
 
 export interface StepRecord {
@@ -432,6 +439,25 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   if (!options.page && !startUrl) {
     throw new Error("startUrl is required when page is not supplied");
   }
+  // Seed cookies are credentials of the same rank as the password value, so
+  // their guards share the pre-timer region: a rejected call must not arm
+  // the deadline timer or any listener. addCookies on a caller-owned context
+  // would silently rewrite the caller's own session state, so cookies plus
+  // an injected page is refused before anything is touched.
+  let seedCookies: ReturnType<typeof resolveCookies> = [];
+  if (options.cookies?.length) {
+    if (options.page) {
+      throw new Error("navigate(): seed cookies are refused on runs with an injected page (context.addCookies would mutate the caller's context)");
+    }
+    seedCookies = resolveCookies(options.cookies, startUrl!);
+    // Video frames cannot be redacted; a seeded cookie can render into them.
+    if (options.recordDir) throw new Error("navigate(): video recording is refused on runs with seed cookies");
+    assertNoPlaywrightDebug();
+    // Same validation as the password: a value that could never be redacted
+    // reliably (empty, control characters, below the safe length) is
+    // rejected before the run starts.
+    for (const c of seedCookies) validateSecretBuffer(Buffer.from(c.value, "utf8"), `cookie "${c.name}"`);
+  }
   let redactor: Redactor | null = null;
   let trustedOrigin: string | null = null;
   let passwordValue: string | null = null;
@@ -451,8 +477,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     // navigate() directly, and an invalid secret (CR/LF, below-minimum or
     // normalization-collapsing length) could never be redacted reliably.
     passwordValue = validateSecretBuffer(Buffer.from(options.password.value, "utf8"));
-    redactor = makeRedactor(passwordValue);
   }
+  // One redactor covers every secret this run carries: the password value and
+  // each seed-cookie value. Longest-first application means a value that is a
+  // prefix of another (two cookies sharing a token prefix) still redacts.
+  const runSecrets = [passwordValue, ...seedCookies.map((c) => c.value)].filter((v): v is string => v !== null);
+  if (runSecrets.length) redactor = makeRedactor(runSecrets);
   const R = (s: string): string => redactor?.redact(s) ?? s;
   // The task itself is model-facing: if a caller ignored the docs and put the
   // value in the task string, scrub it before any model or typing generator
@@ -532,9 +562,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // changed) must not report success.
   // An injected page may already visibly contain or reflect the configured
   // value before any fill: a caller-typed login field, a logged-in page that
-  // echoes it. Owned runs cannot (the value only reaches the page through a
-  // fill), so exposure starts armed exactly for injected credential pages.
-  let credentialUsed = Boolean(options.password && options.page);
+  // echoes it. Owned password runs cannot (the value only reaches the page
+  // through a fill), so exposure starts armed exactly for injected credential
+  // pages. Cookie runs are armed from run start on any page: the seeded
+  // values sit in the browser before the first navigation, so the very first
+  // rendered page can already reflect one into pixels.
+  let credentialUsed = Boolean(options.password && options.page) || seedCookies.length > 0;
   let passwordFilled = false;
 
   let browser: Browser | null = null;
@@ -587,6 +620,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
         });
     observedContext = context;
+    // Seeded before the first navigation (the guards already ran pre-timer;
+    // cookies + injected page and cookies + recording were both refused, so
+    // this only ever touches a run-owned context).
+    if (seedCookies.length) await context.addCookies(seedCookies);
     // No Playwright default (30s) may ever outlive the run budget.
     if (ownsBrowser) {
       context.setDefaultTimeout(8_000);
