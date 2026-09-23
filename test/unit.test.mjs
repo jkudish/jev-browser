@@ -1087,7 +1087,8 @@ test("detectBotProtection: the Verifying-you-are-human variant needs Cloudflare 
   // verification page must not get Cloudflare guidance.
   const bare = detectBotProtection({ title: "Verifying you are human", excerpt: "Verifying you are human. This may take a few seconds." });
   assert.equal(bare, null);
-  // The real variant carries brand evidence with it.
+  // The real variant carries brand evidence with it, which is what lets the
+  // DOM-only run probes stop on this page.
   const branded = detectBotProtection({
     title: "Verifying you are human",
     excerpt: "Verifying you are human. This may take a few seconds. Ray ID: 8ab1c2d3e4f5a6b7",
@@ -1096,11 +1097,12 @@ test("detectBotProtection: the Verifying-you-are-human variant needs Cloudflare 
   assert.equal(branded.kind, "challenge");
   assert.equal(branded.from_page, true);
   assert.ok(branded.evidence.some((e) => e.startsWith("title ")));
-  // A cf-mitigated header corroborates the generic title too.
+  // The header corroborates nothing for stopping: it is last-seen state, so a
+  // generic title with only a header stays annotation, never page evidence.
   const viaHeader = detectBotProtection({ title: "Verify you are human", excerpt: "Checking your connection.", cfMitigated: "challenge" });
   assert.ok(viaHeader);
   assert.equal(viaHeader.kind, "challenge");
-  assert.equal(viaHeader.from_page, true);
+  assert.equal(viaHeader.from_page, false);
 });
 
 test("detectBotProtection: an incidental block phrase does not flip the header's kind", () => {

@@ -446,19 +446,21 @@ const BOT_GUIDANCE = {
 } as const;
 
 /**
- * Pure detector for CDN bot-protection interstitials. Scoring: a Cloudflare
- * response header (cf-mitigated: challenge|blocked) is decisive on its own but
- * is never page evidence; a Cloudflare-signature or branded challenge title
- * counts fully (generic wordings like "Verify you are human" need a
- * Cloudflare-brand body marker or the header to corroborate them); body
- * markers count one point each and need three, including at least one
- * Cloudflare-brand phrase, to stand alone, so an article that quotes a few
- * challenge lines is not flagged as a wall. A marker already matched absorbs
- * its substrings (one visual phrase is one marker). `from_page` means the page
- * evidence independently meets the stopping threshold, never a header plus an
- * incidental body phrase. Block markers (a hard denial page) outrank challenge
- * markers, but only promote the kind when the evidence carrying them is
- * decisive.
+ * Pure detector for CDN bot-protection interstitials. Stopping evidence is
+ * DOM-only and self-sufficient: a Cloudflare-signature or branded challenge
+ * title counts fully (generic wordings like "Verify you are human" need a
+ * Cloudflare-brand body marker to corroborate them), or body markers count one
+ * point each and need three, including at least one brand phrase, to stand
+ * alone, so an article that quotes a few challenge lines is not flagged as a
+ * wall. A marker already matched absorbs its substrings (one visual phrase is
+ * one marker). `from_page` means exactly that: the page evidence alone meets
+ * the stopping threshold, so the run loop's DOM-only probes agree with this
+ * detector on everything that can stop a run. A cf-mitigated response header
+ * is decisive for ANNOTATION only and never page evidence or a title
+ * corroborator: it is last-seen state, and a challenge that auto-passed still
+ * answers with the header. Block markers (a hard denial page) outrank
+ * challenge markers, but only promote the kind when the evidence carrying
+ * them is decisive.
  */
 export function detectBotProtection(signals: BotProtectionSignals): BotProtection | null {
   const title = signals.title.trim().toLowerCase();
@@ -489,7 +491,7 @@ export function detectBotProtection(signals: BotProtectionSignals): BotProtectio
   }
 
   const bodyDecisive = bodyPoints >= 3 && brandSeen;
-  const titleDecisive = titleHit !== null && (!titleHit.generic || brandSeen || headerCf);
+  const titleDecisive = titleHit !== null && (!titleHit.generic || brandSeen);
   // from_page is the DOM decision alone: it is what license the run loop has
   // to stop, and a header plus one incidental body phrase must not grant it.
   const pageDecisive = titleDecisive || bodyDecisive;
