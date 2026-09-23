@@ -3,7 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
-import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request } from "playwright";
+import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request, type Response } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -15,6 +15,7 @@ import {
   buildActionSpace,
   buildCriteria,
   classifyTypingFailure,
+  detectBotProtection,
   heuristicQuery,
   pickAlternate,
   PRICE_PER_MTOK_IN,
@@ -24,6 +25,7 @@ import {
   SeedCookie,
   selectorFor,
   summarizeTypingError,
+  BotProtection,
   TypingSelection,
   TypingWarning,
   TypingWarningCode,
@@ -530,6 +532,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
   const steps: StepRecord[] = [];
   const warnings: TypingWarning[] = [];
+  // Bot-protection state: the last cf-mitigated value seen on a main-document
+  // response, and the detection (if any) that stopped or annotated the run.
+  let cfMitigated: string | null = null;
+  let botProtection: BotProtection | null = null;
   const recordTypingWarning = (
     step: number,
     code: TypingWarningCode,
@@ -625,6 +631,19 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     let page = options.page ?? (await context.newPage());
     const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
+    // Cloudflare's official bot-protection signal: the cf-mitigated response
+    // header on a main-document response. Recorded for evidence; the decision
+    // to stop a run always also requires page evidence (the challenge may
+    // auto-pass and paint the real page after the header was seen).
+    const runPage = page;
+    const onResponse = (res: Response) => {
+      if (res.request().isNavigationRequest() && res.frame() === runPage.mainFrame()) {
+        const value = res.headers()["cf-mitigated"];
+        if (value) cfMitigated = value;
+      }
+    };
+    page.on("response", onResponse);
+    observerCleanups.push(() => runPage.off("response", onResponse));
     let pendingPage: Page | null = null;
     onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
@@ -635,6 +654,48 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     if (startUrl) {
       await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
     }
+
+    // Bot-protection interstitials are walls, not pages to reason about. The
+    // probe is DOM-only on purpose: a stale cf-mitigated header must not keep
+    // a page "blocked" after its challenge auto-passed. A detected challenge
+    // gets one short bounded window to clear itself before the run is
+    // declared blocked; a hard block page never clears, so it waits none.
+    // settleBotProtection distinguishes a wall whose persistence was VERIFIED
+    // (the window ran and the wall was still there) from an unverified one
+    // (no budget for the window): only a verified challenge, or any hard
+    // block, may become the run's outcome; an unverified challenge keeps the
+    // budget outcome (timeout) and is reported as evidence instead.
+    const probeBotProtection = async (): Promise<BotProtection | null> => {
+      const probe = await page
+        .evaluate((cap) => ({
+          title: document.title,
+          body: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, cap),
+        }), excerptCap)
+        .catch(() => ({ title: "", body: "" }));
+      return detectBotProtection({ title: probe.title, excerpt: probe.body });
+    };
+    const settleBotProtection = async (
+      detected: BotProtection,
+    ): Promise<{ protection: BotProtection; verified: boolean } | null> => {
+      // A hard block never clears, so the page itself establishes persistence.
+      if (detected.kind !== "challenge") return { protection: detected, verified: true };
+      const settleDeadline = performance.now() + bounded(8_000);
+      let verified = false;
+      while (performance.now() < settleDeadline && remaining() > 1_000) {
+        await page.waitForTimeout(bounded(1_000));
+        const now = await probeBotProtection();
+        if (!now) return null; // cleared: the real page painted
+        if (now.kind === "block") return { protection: now, verified: true };
+        verified = true; // still a challenge after a wait: persistence verified
+      }
+      return { protection: detected, verified };
+    };
+    // A settled wall becomes the outcome only when its persistence was
+    // established (any hard block, or a challenge that survived its window).
+    // Otherwise the deadline has effectively fired and the budget outcome
+    // keeps precedence: the wall is annotated, the status stays timeout.
+    const wallIsOutcome = (settled: { protection: BotProtection; verified: boolean }) =>
+      settled.protection.kind === "block" || settled.verified;
 
     let lastExecuted: string | null = null;
     // Machine state for repeat recovery, decoupled from the display string:
@@ -648,6 +709,21 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       if (remaining() <= 0) {
         status = "timeout";
         break;
+      }
+
+      // Fail fast on bot protection, before elements are extracted or a Jev
+      // call is spent: an interstitial offers nothing to act on, and burning
+      // steps on one only produces a confident "done" on a wall. Detection
+      // requires page evidence (probeBotProtection is DOM-only); a challenge
+      // that clears within its window lets the run proceed normally.
+      const detectedProtection = await probeBotProtection();
+      if (detectedProtection) {
+        const settledProtection = await settleBotProtection(detectedProtection);
+        if (settledProtection) {
+          botProtection = settledProtection.protection;
+          status = wallIsOutcome(settledProtection) ? "blocked" : "timeout";
+          break;
+        }
       }
 
       const raw = await extractAndStamp(page, bounded, captureCaps, Boolean(options.password));
@@ -934,7 +1010,39 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       if (step === maxSteps) status = "max_steps";
     }
 
-    const finalObservables = await pageObservables(page, bounded, excerptCap);
+    let finalObservables = await pageObservables(page, bounded, excerptCap);
+    // The final page gets the last word. A wall that appeared after the last
+    // action (or after a done/goal judgment while the page changed under it)
+    // must not masquerade as done: DOM-only detection (no header, so a
+    // passed-challenge header cannot manufacture page evidence) with the same
+    // settle window flips the status to blocked. The settle window can also
+    // REPAINT the page (a challenge that auto-passes), so observables are
+    // re-captured after it: the flip decision, any annotation, and the
+    // reported final page must all describe the page that is there now, not
+    // the one captured before the wait. A wall that could not be verified
+    // persistent (no budget for the window) flips nothing; header-only
+    // evidence stays annotation and never changes the outcome either.
+    if (!botProtection) {
+      const finalDecision = detectBotProtection({ title: finalObservables.title, excerpt: finalObservables.excerpt });
+      if (finalDecision) {
+        const settledFinal = await settleBotProtection(finalDecision);
+        finalObservables = await pageObservables(page, bounded, excerptCap);
+        if (settledFinal && wallIsOutcome(settledFinal)) {
+          botProtection = settledFinal.protection;
+          status = "blocked";
+        }
+      }
+    }
+    if (!botProtection) {
+      botProtection = detectBotProtection({
+        title: finalObservables.title,
+        excerpt: finalObservables.excerpt,
+        cfMitigated,
+      });
+    }
+    const publicBotProtection = botProtection
+      ? { provider: botProtection.provider, kind: botProtection.kind, evidence: botProtection.evidence, guidance: botProtection.guidance }
+      : undefined;
     let payload: { truncated: boolean; true_length: number; content: string } | null = null;
     let screenshotBase64: string | null = null;
     let screenshotSuppressed: "credential-fill" | undefined;
@@ -983,6 +1091,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       typing_provider: typingGenerator?.provider ?? null,
       typing_model: typingGenerator?.modelId ?? null,
       password_filled: passwordFilled || undefined,
+      bot_protection: publicBotProtection,
       screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
     };
@@ -1008,6 +1117,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       warnings,
       typing_provider: typingGenerator?.provider ?? null,
       typing_model: typingGenerator?.modelId ?? null,
+      bot_protection: botProtection
+        ? { provider: botProtection.provider, kind: botProtection.kind, evidence: botProtection.evidence, guidance: botProtection.guidance }
+        : undefined,
     };
     return redactor ? redactor.redactDeep(failure) : failure;
   } finally {

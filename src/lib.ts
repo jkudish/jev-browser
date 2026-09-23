@@ -375,6 +375,144 @@ export function classifyTypingFailure(error: unknown): TypingWarningCode {
   return "typing_configuration_error";
 }
 
+// ── Bot-protection (CDN interstitial) detection ─────────────────────────────
+
+/** Inputs the navigation loop already collects: page observables plus the
+ * last-seen value of Cloudflare's cf-mitigated response header on a
+ * main-document response, when one was observed. */
+export interface BotProtectionSignals {
+  title: string;
+  /** Visible body text, whitespace-normalized; a short slice is enough. */
+  excerpt: string;
+  cfMitigated?: string | null;
+}
+
+export interface BotProtection {
+  provider: "cloudflare";
+  kind: "challenge" | "block";
+  /** Short marker descriptions, at most 4; never wholesale page content. */
+  evidence: string[];
+  guidance: string;
+  /**
+   * True when the page itself shows decisive evidence (a challenge title, or
+   * three body markers including a brand phrase) that stands on its own, not
+   * a response header with at most incidental body phrases. Only page
+   * evidence may stop a run: a cf-mitigated header alone means a challenge
+   * answered the navigation, which can still auto-pass and paint the real
+   * page.
+   */
+  from_page: boolean;
+}
+
+const BOT_TITLES: Array<{ text: string; block?: boolean; generic?: boolean }> = [
+  { text: "just a moment..." },
+  { text: "attention required! | cloudflare", block: true },
+  { text: "please wait... | cloudflare" },
+  // Generic wordings that other verification services also use: they only
+  // count when something Cloudflare-specific corroborates them (a brand body
+  // marker or the cf-mitigated header), or another CDN's page gets
+  // Cloudflare-specific guidance.
+  { text: "verify you are human", generic: true },
+  { text: "verifying you are human", generic: true },
+  { text: "checking your browser before accessing", generic: true },
+];
+
+// Longest-first within overlapping pairs so "sorry, you have been blocked"
+// can absorb its substring "you have been blocked" instead of double-counting
+// one visual phrase as two markers. brand: Cloudflare-brand phrases that an
+// incidental quotation of one or two challenge lines will not carry.
+const BOT_BODY_MARKERS: Array<{ text: string; block?: boolean; brand?: boolean }> = [
+  { text: "performing security verification" },
+  { text: "verifying you are human" },
+  { text: "verify you are human" },
+  { text: "checking if the site connection is secure" },
+  { text: "needs to review the security of your connection" },
+  { text: "uses a security service to protect against malicious bots" },
+  { text: "enable javascript and cookies to continue" },
+  { text: "this process is automatic" },
+  { text: "ray id:", brand: true },
+  { text: "performance and security by cloudflare", brand: true },
+  { text: "performance & security by cloudflare", brand: true },
+  { text: "error 1020", block: true, brand: true },
+  { text: "sorry, you have been blocked", block: true },
+  { text: "you have been blocked", block: true },
+];
+
+const BOT_GUIDANCE = {
+  challenge:
+    "Cloudflare served a bot challenge this client cannot pass: automation browsers are detected on their own merits, and a cf_clearance cookie is bound to the browser and IP that earned it, so seeded cookies do not clear the challenge. Run the task from the browser session that earned the clearance (reuse its page), or use the site's API.",
+  block:
+    "Cloudflare or the site blocked this client outright. No interactive challenge was offered, and cookies cannot clear it. Retry from a different network or egress, or use the site's API.",
+} as const;
+
+/**
+ * Pure detector for CDN bot-protection interstitials. Stopping evidence is
+ * DOM-only and self-sufficient: a Cloudflare-signature or branded challenge
+ * title counts fully (generic wordings like "Verify you are human" need a
+ * Cloudflare-brand body marker to corroborate them), or body markers count one
+ * point each and need three, including at least one brand phrase, to stand
+ * alone, so an article that quotes a few challenge lines is not flagged as a
+ * wall. A marker already matched absorbs its substrings (one visual phrase is
+ * one marker). `from_page` means exactly that: the page evidence alone meets
+ * the stopping threshold, so the run loop's DOM-only probes agree with this
+ * detector on everything that can stop a run. A cf-mitigated response header
+ * is decisive for ANNOTATION only and never page evidence or a title
+ * corroborator: it is last-seen state, and a challenge that auto-passed still
+ * answers with the header. Block markers (a hard denial page) outrank
+ * challenge markers, but only promote the kind when the evidence carrying
+ * them is decisive.
+ */
+export function detectBotProtection(signals: BotProtectionSignals): BotProtection | null {
+  const title = signals.title.trim().toLowerCase();
+  const excerpt = signals.excerpt.toLowerCase();
+  const header = (signals.cfMitigated ?? "").trim().toLowerCase();
+  const headerCf = header === "challenge" || header === "blocked";
+  let block = header === "blocked";
+
+  let titleHit: (typeof BOT_TITLES)[number] | null = null;
+  for (const t of BOT_TITLES) {
+    if (title.includes(t.text)) {
+      titleHit = t;
+      break;
+    }
+  }
+
+  let bodyPoints = 0;
+  let brandSeen = false;
+  let blockFromBody = false;
+  const matched: string[] = [];
+  for (const m of BOT_BODY_MARKERS) {
+    if (!excerpt.includes(m.text)) continue;
+    if (matched.some((t) => t.includes(m.text))) continue; // substring of a phrase already counted
+    matched.push(m.text);
+    bodyPoints += 1;
+    brandSeen ||= Boolean(m.brand);
+    blockFromBody ||= Boolean(m.block);
+  }
+
+  const bodyDecisive = bodyPoints >= 3 && brandSeen;
+  const titleDecisive = titleHit !== null && (!titleHit.generic || brandSeen);
+  // from_page is the DOM decision alone: it is what license the run loop has
+  // to stop, and a header plus one incidental body phrase must not grant it.
+  const pageDecisive = titleDecisive || bodyDecisive;
+  if (!pageDecisive && !headerCf) return null;
+
+  const evidence: string[] = [];
+  if (headerCf) evidence.push(`header cf-mitigated: ${header}`);
+  if (titleDecisive) evidence.push(`title "${titleHit!.text}"`);
+  for (const m of matched) {
+    if (evidence.length >= 4) break;
+    evidence.push(`body "${m}"`);
+  }
+  block ||= (titleDecisive && Boolean(titleHit!.block)) || (bodyDecisive && blockFromBody);
+  return {
+    provider: "cloudflare",
+    kind: block ? "block" : "challenge",
+    evidence,
+    guidance: block ? BOT_GUIDANCE.block : BOT_GUIDANCE.challenge,
+    from_page: pageDecisive,
+  };
+}
 // ── Seed cookies ─────────────────────────────────────────────────────────────
 
 /** A cookie to seed the browser context with before the first navigation. */

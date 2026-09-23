@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import {
   buildActionSpace,
   buildCriteria,
+  detectBotProtection,
   heuristicQuery,
   isNoiseHref,
   isNoiseName,
@@ -995,6 +996,155 @@ test("generateTextToType: the google provider generates without a compatibility 
   }
 });
 
+// ── detectBotProtection ─────────────────────────────────────────────────────
+// The scoring rules: a cf-mitigated header or a known challenge title is
+// decisive on its own; body markers need three to stand alone, so an article
+// quoting two challenge phrases stays undetected. Block markers outrank
+// challenge markers.
+
+test("detectBotProtection: a real Cloudflare challenge page is detected as a page-evidence challenge", () => {
+  const d = detectBotProtection({
+    title: "Just a moment...",
+    excerpt: "www.opensubtitles.com Performing security verification This website uses a security service to protect against malicious bots. Ray ID: a3f56bcf9b4e5a49 Performance and Security by Cloudflare Privacy",
+  });
+  assert.ok(d);
+  assert.equal(d.provider, "cloudflare");
+  assert.equal(d.kind, "challenge");
+  assert.equal(d.from_page, true);
+  assert.ok(d.evidence.some((e) => e.startsWith("title ")));
+  assert.ok(d.evidence.some((e) => e === 'body "performing security verification"'));
+  assert.ok(d.evidence.length <= 4);
+  assert.ok(d.guidance.includes("reuse its page"));
+});
+
+test("detectBotProtection: the cf-mitigated header is decisive without page markers and is not page evidence", () => {
+  const d = detectBotProtection({ title: "Welcome", excerpt: "A perfectly normal page about coffee.", cfMitigated: "challenge" });
+  assert.ok(d);
+  assert.equal(d.kind, "challenge");
+  assert.equal(d.from_page, false);
+  assert.deepEqual(d.evidence, ["header cf-mitigated: challenge"]);
+});
+
+test("detectBotProtection: cf-mitigated blocked is a block kind", () => {
+  const d = detectBotProtection({ title: "Access denied", excerpt: "Nothing to see here.", cfMitigated: "BLOCKED" });
+  assert.ok(d);
+  assert.equal(d.kind, "block");
+  assert.equal(d.from_page, false);
+  assert.ok(d.guidance.includes("different network"));
+});
+
+test("detectBotProtection: a challenge title alone is decisive", () => {
+  const d = detectBotProtection({ title: "Just a moment...", excerpt: "" });
+  assert.ok(d);
+  assert.equal(d.kind, "challenge");
+  assert.equal(d.from_page, true);
+});
+
+test("detectBotProtection: body markers alone need three; one or two stay undetected", () => {
+  const one = detectBotProtection({ title: "Blog", excerpt: "An article that says verify you are human once." });
+  assert.equal(one, null);
+  const two = detectBotProtection({
+    title: "Blog",
+    excerpt: "The page said verify you are human and showed Ray ID: 1234.",
+  });
+  assert.equal(two, null);
+  const three = detectBotProtection({
+    title: "Blog",
+    excerpt: "It said verify you are human, showed Ray ID: 1234, and ended with Performance and Security by Cloudflare.",
+  });
+  assert.ok(three);
+  assert.equal(three.kind, "challenge");
+  assert.equal(three.from_page, true);
+});
+
+test("detectBotProtection: a hard block page is a block with page evidence", () => {
+  const d = detectBotProtection({
+    title: "Attention Required! | Cloudflare",
+    excerpt: "Sorry, you have been blocked. Error 1020 Access denied. Ray ID: 9abc",
+  });
+  assert.ok(d);
+  assert.equal(d.kind, "block");
+  assert.equal(d.from_page, true);
+  assert.ok(d.guidance.includes("cannot clear it"));
+});
+
+test("detectBotProtection: ordinary pages and empty signals stay undetected", () => {
+  assert.equal(detectBotProtection({ title: "OpenSubtitles", excerpt: "Login or sign in to your account. Latest subtitles." }), null);
+  assert.equal(detectBotProtection({ title: "", excerpt: "" }), null);
+  assert.equal(detectBotProtection({ title: "Welcome", excerpt: "Just a moment while we load your dashboard." }), null);
+});
+
+test("detectBotProtection: evidence is capped at four entries", () => {
+  const d = detectBotProtection({
+    title: "Please Wait... | Cloudflare",
+    excerpt:
+      "Performing security verification. Verify you are human. Checking if the site connection is secure. Needs to review the security of your connection. Enable JavaScript and cookies to continue. Ray ID: 1",
+  });
+  assert.ok(d);
+  assert.ok(d.evidence.length <= 4);
+});
+
+test("detectBotProtection: the Verifying-you-are-human variant needs Cloudflare corroboration", () => {
+  // The generic wording alone is not Cloudflare-specific: another service's
+  // verification page must not get Cloudflare guidance.
+  const bare = detectBotProtection({ title: "Verifying you are human", excerpt: "Verifying you are human. This may take a few seconds." });
+  assert.equal(bare, null);
+  // The real variant carries brand evidence with it, which is what lets the
+  // DOM-only run probes stop on this page.
+  const branded = detectBotProtection({
+    title: "Verifying you are human",
+    excerpt: "Verifying you are human. This may take a few seconds. Ray ID: 8ab1c2d3e4f5a6b7",
+  });
+  assert.ok(branded);
+  assert.equal(branded.kind, "challenge");
+  assert.equal(branded.from_page, true);
+  assert.ok(branded.evidence.some((e) => e.startsWith("title ")));
+  // The header corroborates nothing for stopping: it is last-seen state, so a
+  // generic title with only a header stays annotation, never page evidence.
+  const viaHeader = detectBotProtection({ title: "Verify you are human", excerpt: "Checking your connection.", cfMitigated: "challenge" });
+  assert.ok(viaHeader);
+  assert.equal(viaHeader.kind, "challenge");
+  assert.equal(viaHeader.from_page, false);
+});
+
+test("detectBotProtection: an incidental block phrase does not flip the header's kind", () => {
+  // A clean page delivered with cf-mitigated: challenge that quotes one block
+  // phrase (an article, a support page): the header's kind stands, and the
+  // page never becomes run-stopping evidence.
+  const d = detectBotProtection({
+    title: "How Cloudflare works",
+    excerpt: "When a site is denied, the page says sorry, you have been blocked, and shows an error code.",
+    cfMitigated: "challenge",
+  });
+  assert.ok(d);
+  assert.equal(d.kind, "challenge", "a single incidental body phrase must not promote block");
+  assert.equal(d.from_page, false);
+  assert.ok(d.evidence.includes("header cf-mitigated: challenge"));
+});
+
+test("detectBotProtection: body-only detection needs a Cloudflare-brand phrase among the markers", () => {
+  // Three non-brand challenge phrases: an article quoting challenge lines,
+  // not an interstitial.
+  const noBrand = detectBotProtection({
+    title: "Blog post",
+    excerpt: "The page said performing security verification, then verify you are human, and that this process is automatic.",
+  });
+  assert.equal(noBrand, null);
+  // Same three plus one brand phrase: an interstitial.
+  const withBrand = detectBotProtection({
+    title: "Blog post",
+    excerpt: "It said performing security verification, verify you are human, this process is automatic, and ended with Ray ID: 42.",
+  });
+  assert.ok(withBrand);
+  assert.equal(withBrand.kind, "challenge");
+});
+
+test("detectBotProtection: overlapping block phrases count once, not twice", () => {
+  // "Sorry, you have been blocked" contains "you have been blocked"; one
+  // visual phrase is one marker, so this single line alone stays undetected.
+  const overlap = detectBotProtection({ title: "Access denied", excerpt: "Sorry, you have been blocked" });
+  assert.equal(overlap, null);
+});
 
 test("resolveCookies defaults to a host-only cookie with hardening attributes", () => {
   assert.deepEqual(resolveCookies(undefined, "https://example.com/a"), []);
