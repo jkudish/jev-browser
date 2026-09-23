@@ -101,6 +101,11 @@ async function startFixtureSite() {
       // A challenge that auto-passes: after 1.2s the page paints real content,
       // like a JS challenge that clears itself without interaction.
       res.end(`<!doctype html><html><head><title>Just a moment...</title></head><body><p>Performing security verification. Verify you are human.</p><script>setTimeout(() => { document.title = "Welcome in"; document.body.innerHTML = "<h1>Welcome in</h1><p>The real page after the challenge cleared.</p>"; }, 1200);</script></body></html>`);
+    } else if (url.pathname === "/locklate") {
+      // A normal page whose only control navigates to the challenge: with
+      // maxSteps 1, the click executes, the budget ends, and the challenge is
+      // first visible on the FINAL page. The final pass must flip the status.
+      res.end(page("Start here", `<p>An ordinary page.</p><a href="/locked">Continue</a>`));
     } else if (url.pathname === "/mitigated") {
       // A clean page delivered with Cloudflare's cf-mitigated header, as a
       // passed challenge looks in the response log: the header alone must
@@ -1178,6 +1183,29 @@ test("bot protection: the cf-mitigated header alone never stops a run, only anno
     assert.deepEqual(body.bot_protection.evidence, ["header cf-mitigated: challenge"]);
     assert.equal(body.final_title, "Coffee menu");
     assert.ok(body.usage.jev_calls >= 1);
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: a wall that appears on the final page flips the status instead of reporting done", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Click the Continue link",
+      startUrl: `${site.baseUrl}/locklate`,
+      maxSteps: 1,
+      maxSeconds: 60,
+    });
+    // One judgment was spent on the real page, then the click landed on the
+    // challenge as the budget ended: the run must not report max_steps (or
+    // done) over an interstitial.
+    assert.equal(body.status, "blocked", `expected blocked, got ${body.status}: ${JSON.stringify(body.steps)}`);
+    assert.equal(body.bot_protection.kind, "challenge");
+    assert.equal(body.steps.length, 1);
+    assert.equal(body.usage.jev_calls, 1);
+    assert.match(body.steps[0].executed_action ?? "", /^click_/);
+    assert.match(body.final_title, /Just a moment/);
   } finally {
     site.close();
   }

@@ -407,23 +407,29 @@ const BOT_TITLES: Array<{ text: string; block?: boolean }> = [
   { text: "attention required! | cloudflare", block: true },
   { text: "please wait... | cloudflare" },
   { text: "verify you are human" },
+  { text: "verifying you are human" },
   { text: "checking your browser before accessing" },
 ];
 
-const BOT_BODY_MARKERS: Array<{ text: string; block?: boolean }> = [
+// Longest-first within overlapping pairs so "sorry, you have been blocked"
+// can absorb its substring "you have been blocked" instead of double-counting
+// one visual phrase as two markers. brand: Cloudflare-brand phrases that an
+// incidental quotation of one or two challenge lines will not carry.
+const BOT_BODY_MARKERS: Array<{ text: string; block?: boolean; brand?: boolean }> = [
   { text: "performing security verification" },
+  { text: "verifying you are human" },
   { text: "verify you are human" },
   { text: "checking if the site connection is secure" },
   { text: "needs to review the security of your connection" },
   { text: "uses a security service to protect against malicious bots" },
   { text: "enable javascript and cookies to continue" },
   { text: "this process is automatic" },
-  { text: "ray id:" },
-  { text: "performance and security by cloudflare" },
-  { text: "performance & security by cloudflare" },
-  { text: "you have been blocked", block: true },
+  { text: "ray id:", brand: true },
+  { text: "performance and security by cloudflare", brand: true },
+  { text: "performance & security by cloudflare", brand: true },
+  { text: "error 1020", block: true, brand: true },
   { text: "sorry, you have been blocked", block: true },
-  { text: "error 1020", block: true },
+  { text: "you have been blocked", block: true },
 ];
 
 const BOT_GUIDANCE = {
@@ -436,9 +442,11 @@ const BOT_GUIDANCE = {
 /**
  * Pure detector for CDN bot-protection interstitials. Scoring: a Cloudflare
  * response header (cf-mitigated: challenge|blocked) or a known challenge
- * title counts fully; body markers count one point each and need three to
- * stand alone, so an article that quotes two challenge phrases cannot trip
- * the detector. Block markers (a hard denial page) outrank challenge markers.
+ * title counts fully; body markers count one point each and need three,
+ * including at least one Cloudflare-brand phrase, to stand alone, so an
+ * article that quotes a few challenge lines is not flagged as a wall. A
+ * marker already matched absorbs its substrings (one visual phrase is one
+ * marker). Block markers (a hard denial page) outrank challenge markers.
  */
 export function detectBotProtection(signals: BotProtectionSignals): BotProtection | null {
   const title = signals.title.trim().toLowerCase();
@@ -463,15 +471,19 @@ export function detectBotProtection(signals: BotProtectionSignals): BotProtectio
     }
   }
   let bodyPoints = 0;
+  let brandSeen = false;
+  const matched: string[] = [];
   for (const m of BOT_BODY_MARKERS) {
-    if (excerpt.includes(m.text)) {
-      bodyPoints += 1;
-      block ||= Boolean(m.block);
-      fromPage = true;
-      if (evidence.length < 4) evidence.push(`body "${m.text}"`);
-    }
+    if (!excerpt.includes(m.text)) continue;
+    if (matched.some((t) => t.includes(m.text))) continue; // substring of a phrase already counted
+    matched.push(m.text);
+    bodyPoints += 1;
+    brandSeen ||= Boolean(m.brand);
+    block ||= Boolean(m.block);
+    fromPage = true;
+    if (evidence.length < 4) evidence.push(`body "${m.text}"`);
   }
-  if (!decisive && bodyPoints < 3) return null;
+  if (!decisive && (bodyPoints < 3 || !brandSeen)) return null;
   return {
     provider: "cloudflare",
     kind: block ? "block" : "challenge",

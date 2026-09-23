@@ -606,7 +606,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
     };
     page.on("response", onResponse);
-    observerCleanups.push(() => page.off("response", onResponse));
+    observerCleanups.push(() => runPage.off("response", onResponse));
     let pendingPage: Page | null = null;
     onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
@@ -958,10 +958,22 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     }
 
     const finalObservables = await pageObservables(page, bounded, excerptCap);
-    // Annotation for runs that ended with protection visible (for example the
-    // last step landed on a challenge and the step budget ended) or that saw
-    // only the cf-mitigated header: the field is reported without changing
-    // the run's status. Stopping early is decided above, on page evidence.
+    // The final page gets the last word. A wall that appeared after the last
+    // action (or after a done/goal judgment while the page changed under it)
+    // must not masquerade as done: DOM-only detection (no header, so a
+    // passed-challenge header cannot manufacture page evidence) with the same
+    // settle window flips the status to blocked. Header-only detection stays
+    // annotation: it never changes the outcome.
+    if (!botProtection) {
+      const finalDecision = detectBotProtection({ title: finalObservables.title, excerpt: finalObservables.excerpt });
+      if (finalDecision) {
+        const settledFinal = await settleBotProtection(finalDecision);
+        if (settledFinal) {
+          botProtection = settledFinal;
+          status = "blocked";
+        }
+      }
+    }
     if (!botProtection) {
       botProtection = detectBotProtection({
         title: finalObservables.title,

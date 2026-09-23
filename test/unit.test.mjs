@@ -1081,3 +1081,34 @@ test("detectBotProtection: evidence is capped at four entries", () => {
   assert.ok(d);
   assert.ok(d.evidence.length <= 4);
 });
+
+test("detectBotProtection: the Verifying-you-are-human variant is a decisive title", () => {
+  const d = detectBotProtection({ title: "Verifying you are human", excerpt: "Verifying you are human. This may take a few seconds." });
+  assert.ok(d);
+  assert.equal(d.kind, "challenge");
+  assert.equal(d.from_page, true);
+});
+
+test("detectBotProtection: body-only detection needs a Cloudflare-brand phrase among the markers", () => {
+  // Three non-brand challenge phrases: an article quoting challenge lines,
+  // not an interstitial.
+  const noBrand = detectBotProtection({
+    title: "Blog post",
+    excerpt: "The page said performing security verification, then verify you are human, and that this process is automatic.",
+  });
+  assert.equal(noBrand, null);
+  // Same three plus one brand phrase: an interstitial.
+  const withBrand = detectBotProtection({
+    title: "Blog post",
+    excerpt: "It said performing security verification, verify you are human, this process is automatic, and ended with Ray ID: 42.",
+  });
+  assert.ok(withBrand);
+  assert.equal(withBrand.kind, "challenge");
+});
+
+test("detectBotProtection: overlapping block phrases count once, not twice", () => {
+  // "Sorry, you have been blocked" contains "you have been blocked"; one
+  // visual phrase is one marker, so this single line alone stays undetected.
+  const overlap = detectBotProtection({ title: "Access denied", excerpt: "Sorry, you have been blocked" });
+  assert.equal(overlap, null);
+});
