@@ -3,7 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
-import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request } from "playwright";
+import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request, type Response } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -15,6 +15,7 @@ import {
   buildActionSpace,
   buildCriteria,
   classifyTypingFailure,
+  detectBotProtection,
   heuristicQuery,
   pickAlternate,
   PRICE_PER_MTOK_IN,
@@ -22,6 +23,7 @@ import {
   resolveTypingSelection,
   selectorFor,
   summarizeTypingError,
+  BotProtection,
   TypingSelection,
   TypingWarning,
   TypingWarningCode,
@@ -500,6 +502,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
   const steps: StepRecord[] = [];
   const warnings: TypingWarning[] = [];
+  // Bot-protection state: the last cf-mitigated value seen on a main-document
+  // response, and the detection (if any) that stopped or annotated the run.
+  let cfMitigated: string | null = null;
+  let botProtection: BotProtection | null = null;
   const recordTypingWarning = (
     step: number,
     code: TypingWarningCode,
@@ -588,6 +594,19 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     let page = options.page ?? (await context.newPage());
     const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
+    // Cloudflare's official bot-protection signal: the cf-mitigated response
+    // header on a main-document response. Recorded for evidence; the decision
+    // to stop a run always also requires page evidence (the challenge may
+    // auto-pass and paint the real page after the header was seen).
+    const runPage = page;
+    const onResponse = (res: Response) => {
+      if (res.request().isNavigationRequest() && res.frame() === runPage.mainFrame()) {
+        const value = res.headers()["cf-mitigated"];
+        if (value) cfMitigated = value;
+      }
+    };
+    page.on("response", onResponse);
+    observerCleanups.push(() => page.off("response", onResponse));
     let pendingPage: Page | null = null;
     onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
@@ -598,6 +617,32 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     if (startUrl) {
       await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
     }
+
+    // Bot-protection interstitials are walls, not pages to reason about. The
+    // probe is DOM-only on purpose: a stale cf-mitigated header must not keep
+    // a page "blocked" after its challenge auto-passed. A detected challenge
+    // gets one short bounded window to clear itself before the run is
+    // declared blocked; a hard block page never clears, so it waits none.
+    const probeBotProtection = async (): Promise<BotProtection | null> => {
+      const probe = await page
+        .evaluate(() => ({
+          title: document.title,
+          body: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 600),
+        }))
+        .catch(() => ({ title: "", body: "" }));
+      return detectBotProtection({ title: probe.title, excerpt: probe.body });
+    };
+    const settleBotProtection = async (detected: BotProtection): Promise<BotProtection | null> => {
+      if (detected.kind !== "challenge") return detected;
+      const settleDeadline = performance.now() + bounded(8_000);
+      while (performance.now() < settleDeadline && remaining() > 1_000) {
+        await page.waitForTimeout(bounded(1_000));
+        const now = await probeBotProtection();
+        if (!now) return null;
+        if (now.kind === "block") return now;
+      }
+      return detected;
+    };
 
     let lastExecuted: string | null = null;
     // Machine state for repeat recovery, decoupled from the display string:
@@ -611,6 +656,21 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       if (remaining() <= 0) {
         status = "timeout";
         break;
+      }
+
+      // Fail fast on bot protection, before elements are extracted or a Jev
+      // call is spent: an interstitial offers nothing to act on, and burning
+      // steps on one only produces a confident "done" on a wall. Detection
+      // requires page evidence (probeBotProtection is DOM-only); a challenge
+      // that clears within its window lets the run proceed normally.
+      const detectedProtection = await probeBotProtection();
+      if (detectedProtection) {
+        const settledProtection = await settleBotProtection(detectedProtection);
+        if (settledProtection) {
+          botProtection = settledProtection;
+          status = "blocked";
+          break;
+        }
       }
 
       const raw = await extractAndStamp(page, bounded, captureCaps, Boolean(options.password));
@@ -898,6 +958,20 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     }
 
     const finalObservables = await pageObservables(page, bounded, excerptCap);
+    // Annotation for runs that ended with protection visible (for example the
+    // last step landed on a challenge and the step budget ended) or that saw
+    // only the cf-mitigated header: the field is reported without changing
+    // the run's status. Stopping early is decided above, on page evidence.
+    if (!botProtection) {
+      botProtection = detectBotProtection({
+        title: finalObservables.title,
+        excerpt: finalObservables.excerpt,
+        cfMitigated,
+      });
+    }
+    const publicBotProtection = botProtection
+      ? { provider: botProtection.provider, kind: botProtection.kind, evidence: botProtection.evidence, guidance: botProtection.guidance }
+      : undefined;
     let payload: { truncated: boolean; true_length: number; content: string } | null = null;
     let screenshotBase64: string | null = null;
     let screenshotSuppressed: "credential-fill" | undefined;
@@ -946,6 +1020,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       typing_provider: typingGenerator?.provider ?? null,
       typing_model: typingGenerator?.modelId ?? null,
       password_filled: passwordFilled || undefined,
+      bot_protection: publicBotProtection,
       screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
     };
@@ -971,6 +1046,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       warnings,
       typing_provider: typingGenerator?.provider ?? null,
       typing_model: typingGenerator?.modelId ?? null,
+      bot_protection: botProtection
+        ? { provider: botProtection.provider, kind: botProtection.kind, evidence: botProtection.evidence, guidance: botProtection.guidance }
+        : undefined,
     };
     return redactor ? redactor.redactDeep(failure) : failure;
   } finally {

@@ -374,3 +374,109 @@ export function classifyTypingFailure(error: unknown): TypingWarningCode {
   }
   return "typing_configuration_error";
 }
+
+// ── Bot-protection (CDN interstitial) detection ─────────────────────────────
+
+/** Inputs the navigation loop already collects: page observables plus the
+ * last-seen value of Cloudflare's cf-mitigated response header on a
+ * main-document response, when one was observed. */
+export interface BotProtectionSignals {
+  title: string;
+  /** Visible body text, whitespace-normalized; a short slice is enough. */
+  excerpt: string;
+  cfMitigated?: string | null;
+}
+
+export interface BotProtection {
+  provider: "cloudflare";
+  kind: "challenge" | "block";
+  /** Short marker descriptions, at most 4; never wholesale page content. */
+  evidence: string[];
+  guidance: string;
+  /**
+   * True when the page itself shows the markers (its title or body), not just
+   * a response header. Only page evidence may stop a run: a cf-mitigated
+   * header alone means a challenge answered the navigation, which can still
+   * auto-pass and paint the real page.
+   */
+  from_page: boolean;
+}
+
+const BOT_TITLES: Array<{ text: string; block?: boolean }> = [
+  { text: "just a moment..." },
+  { text: "attention required! | cloudflare", block: true },
+  { text: "please wait... | cloudflare" },
+  { text: "verify you are human" },
+  { text: "checking your browser before accessing" },
+];
+
+const BOT_BODY_MARKERS: Array<{ text: string; block?: boolean }> = [
+  { text: "performing security verification" },
+  { text: "verify you are human" },
+  { text: "checking if the site connection is secure" },
+  { text: "needs to review the security of your connection" },
+  { text: "uses a security service to protect against malicious bots" },
+  { text: "enable javascript and cookies to continue" },
+  { text: "this process is automatic" },
+  { text: "ray id:" },
+  { text: "performance and security by cloudflare" },
+  { text: "performance & security by cloudflare" },
+  { text: "you have been blocked", block: true },
+  { text: "sorry, you have been blocked", block: true },
+  { text: "error 1020", block: true },
+];
+
+const BOT_GUIDANCE = {
+  challenge:
+    "Cloudflare served a bot challenge this client cannot pass: automation browsers are detected on their own merits, and a cf_clearance cookie is bound to the browser and IP that earned it, so seeded cookies do not clear the challenge. Run the task from the browser session that earned the clearance (reuse its page), or use the site's API.",
+  block:
+    "Cloudflare or the site blocked this client outright. No interactive challenge was offered, and cookies cannot clear it. Retry from a different network or egress, or use the site's API.",
+} as const;
+
+/**
+ * Pure detector for CDN bot-protection interstitials. Scoring: a Cloudflare
+ * response header (cf-mitigated: challenge|blocked) or a known challenge
+ * title counts fully; body markers count one point each and need three to
+ * stand alone, so an article that quotes two challenge phrases cannot trip
+ * the detector. Block markers (a hard denial page) outrank challenge markers.
+ */
+export function detectBotProtection(signals: BotProtectionSignals): BotProtection | null {
+  const title = signals.title.trim().toLowerCase();
+  const excerpt = signals.excerpt.toLowerCase();
+  const evidence: string[] = [];
+  let decisive = false;
+  let block = false;
+  let fromPage = false;
+  const header = (signals.cfMitigated ?? "").trim().toLowerCase();
+  if (header === "challenge" || header === "blocked") {
+    decisive = true;
+    block ||= header === "blocked";
+    evidence.push(`header cf-mitigated: ${header}`);
+  }
+  for (const t of BOT_TITLES) {
+    if (title.includes(t.text)) {
+      decisive = true;
+      block ||= Boolean(t.block);
+      fromPage = true;
+      evidence.push(`title "${t.text}"`);
+      break;
+    }
+  }
+  let bodyPoints = 0;
+  for (const m of BOT_BODY_MARKERS) {
+    if (excerpt.includes(m.text)) {
+      bodyPoints += 1;
+      block ||= Boolean(m.block);
+      fromPage = true;
+      if (evidence.length < 4) evidence.push(`body "${m.text}"`);
+    }
+  }
+  if (!decisive && bodyPoints < 3) return null;
+  return {
+    provider: "cloudflare",
+    kind: block ? "block" : "challenge",
+    evidence,
+    guidance: block ? BOT_GUIDANCE.block : BOT_GUIDANCE.challenge,
+    from_page: fromPage,
+  };
+}

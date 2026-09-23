@@ -85,6 +85,28 @@ async function startFixtureSite() {
       res.end(page("See you there", `<p>guest=${url.searchParams.get("guest") ?? ""}</p>`));
     } else if (url.pathname === "/found") {
       res.end(page("Results", `<p>Ristretto: a short shot of espresso (${url.searchParams.get("q") ?? ""})</p>`));
+    } else if (url.pathname === "/locked") {
+      // A Cloudflare-style managed challenge interstitial, modelled on a real
+      // 403 response: challenge title plus three body markers, static.
+      res.end(
+        page(
+          "Just a moment...",
+          `<p>www.example.com Performing security verification. This website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.</p><p>Ray ID: a3f56bcf9b4e5a49 Performance and Security by Cloudflare Privacy</p>`,
+        ),
+      );
+    } else if (url.pathname === "/hardblock") {
+      // A Cloudflare hard-block page: no interactive challenge, just denial.
+      res.end(page("Attention Required! | Cloudflare", `<p>Sorry, you have been blocked. Error 1020 Access denied. Ray ID: 9abc123</p>`));
+    } else if (url.pathname === "/clearing") {
+      // A challenge that auto-passes: after 1.2s the page paints real content,
+      // like a JS challenge that clears itself without interaction.
+      res.end(`<!doctype html><html><head><title>Just a moment...</title></head><body><p>Performing security verification. Verify you are human.</p><script>setTimeout(() => { document.title = "Welcome in"; document.body.innerHTML = "<h1>Welcome in</h1><p>The real page after the challenge cleared.</p>"; }, 1200);</script></body></html>`);
+    } else if (url.pathname === "/mitigated") {
+      // A clean page delivered with Cloudflare's cf-mitigated header, as a
+      // passed challenge looks in the response log: the header alone must
+      // never stop a run, only annotate it.
+      res.setHeader("cf-mitigated", "challenge");
+      res.end(page("Coffee menu", `<p>Espresso, ristretto, and flat whites are all available today.</p>`));
     } else {
       res.statusCode = 404;
       res.end(page("Not found", ""));
@@ -1075,5 +1097,88 @@ test("allow_typing false ignores typing configuration entirely (#2)", async () =
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+// ── Bot protection: Cloudflare interstitials are named, not reasoned about ──
+
+test("bot protection: a persistent challenge stops the run before any Jev call", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Report the page title and stop",
+      startUrl: `${site.baseUrl}/locked`,
+      maxSteps: 4,
+      maxSeconds: 60,
+    });
+    assert.equal(body.status, "blocked");
+    assert.ok(body.bot_protection, "bot_protection must be present on a blocked run");
+    assert.equal(body.bot_protection.provider, "cloudflare");
+    assert.equal(body.bot_protection.kind, "challenge");
+    assert.ok(body.bot_protection.evidence.some((e) => e.startsWith("title ")));
+    assert.ok(body.bot_protection.guidance.length > 0);
+    assert.equal(body.usage.jev_calls, 0, "no Jev call may be spent on an interstitial");
+    assert.equal(body.steps.length, 0, "no steps may be recorded on an interstitial");
+    assert.match(body.final_title, /Just a moment/);
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: a hard block stops the run immediately with kind block", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const started = Date.now();
+    const body = await navigate({
+      task: "Report the page title and stop",
+      startUrl: `${site.baseUrl}/hardblock`,
+      maxSteps: 4,
+      maxSeconds: 60,
+    });
+    assert.equal(body.status, "blocked");
+    assert.equal(body.bot_protection.kind, "block");
+    assert.ok(body.bot_protection.guidance.includes("different network"));
+    assert.equal(body.usage.jev_calls, 0);
+    assert.equal(body.steps.length, 0);
+    assert.ok(Date.now() - started < 10_000, "a hard block gets no challenge wait-out window");
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: a challenge that clears itself within its window lets the run proceed", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Report the page title and stop",
+      startUrl: `${site.baseUrl}/clearing`,
+      maxSteps: 4,
+      maxSeconds: 60,
+    });
+    assert.ok(body.status === "done" || body.status === "goal_achieved", `run should complete, got ${body.status}`);
+    assert.equal(body.bot_protection, undefined, "a cleared challenge must not leave bot_protection set");
+    assert.equal(body.final_title, "Welcome in");
+    assert.ok(body.usage.jev_calls >= 1, "the run must proceed to real Jev steps after the challenge clears");
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: the cf-mitigated header alone never stops a run, only annotates it", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Report the page title and stop",
+      startUrl: `${site.baseUrl}/mitigated`,
+      maxSteps: 4,
+      maxSeconds: 60,
+    });
+    assert.ok(body.status === "done" || body.status === "goal_achieved", `run should complete, got ${body.status}`);
+    assert.ok(body.bot_protection, "the header signal should be annotated");
+    assert.deepEqual(body.bot_protection.evidence, ["header cf-mitigated: challenge"]);
+    assert.equal(body.final_title, "Coffee menu");
+    assert.ok(body.usage.jev_calls >= 1);
+  } finally {
+    site.close();
   }
 });
