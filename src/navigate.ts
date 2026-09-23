@@ -630,10 +630,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     // budget outcome (timeout) and is reported as evidence instead.
     const probeBotProtection = async (): Promise<BotProtection | null> => {
       const probe = await page
-        .evaluate(() => ({
+        .evaluate((cap) => ({
           title: document.title,
-          body: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 600),
-        }))
+          body: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, cap),
+        }), excerptCap)
         .catch(() => ({ title: "", body: "" }));
       return detectBotProtection({ title: probe.title, excerpt: probe.body });
     };

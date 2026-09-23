@@ -111,6 +111,17 @@ async function startFixtureSite() {
       // (see /clearing): the final pass must wait it out and report the real
       // page, not a wall that has already gone.
       res.end(page("Start here", `<p>An ordinary page.</p><a href="/clearing">Continue</a>`));
+    } else if (url.pathname === "/lockdeep") {
+      // A persistent challenge whose brand evidence sits past the probe's old
+      // 600-char body slice (a real interstitial can paint copy first): the
+      // probe, the settle probe, and the final check must all see the same
+      // excerpt, or a wall present at every step reads as cleared at the end.
+      res.end(
+        page(
+          "Verifying you are human",
+          `<p>${"Please stand by while we confirm your connection is ready. ".repeat(16)}</p><p>Ray ID: 5f0e1d2c3b4a5678</p>`,
+        ),
+      );
     } else if (url.pathname === "/mitigated") {
       // A clean page delivered with Cloudflare's cf-mitigated header, as a
       // passed challenge looks in the response log: the header alone must
@@ -1256,6 +1267,28 @@ test("bot protection: a challenge the budget cannot verify keeps the timeout out
     assert.equal(body.status, "timeout", `expected timeout, got ${body.status}`);
     assert.ok(body.bot_protection, "the unverified wall must still be annotated");
     assert.equal(body.bot_protection.kind, "challenge");
+    assert.equal(body.usage.jev_calls, 0);
+    assert.equal(body.steps.length, 0);
+  } finally {
+    site.close();
+  }
+});
+
+test("bot protection: brand evidence past the short body slice still stops the run", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  try {
+    const body = await navigate({
+      task: "Report the page title and stop",
+      startUrl: `${site.baseUrl}/lockdeep`,
+      maxSteps: 4,
+      maxSeconds: 60,
+    });
+    // The Ray ID sits at ~900 chars: every probe sees the same excerpt as the
+    // final check, so the wall is caught at step 1 (not only annotated at the
+    // end after the settle probe misread the unchanged page as cleared).
+    assert.equal(body.status, "blocked", `expected blocked, got ${body.status}`);
+    assert.equal(body.bot_protection.kind, "challenge");
+    assert.ok(body.bot_protection.evidence.some((e) => e.startsWith("title ")));
     assert.equal(body.usage.jev_calls, 0);
     assert.equal(body.steps.length, 0);
   } finally {
