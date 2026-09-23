@@ -29,9 +29,16 @@ export function createVercelDriver(evaluate: typeof experimental_evaluate = expe
             const status = (error as { statusCode?: unknown }).statusCode;
             throw new Error(`Vercel AI Gateway ${typeof status === "number" ? `HTTP ${status}` : "request failed"} (response omitted)`);
           }
+          const usage = result.usage;
+          if (usage !== undefined && (typeof usage !== "object" || usage === null || Array.isArray(usage))) {
+            throw new Error("Vercel AI Gateway invalid usage (response omitted)");
+          }
           return {
             answers: adaptVercelAnswers(result.answers, result.providerMetadata),
-            usage: { input_tokens: result.usage?.inputTokens ?? 0, output_tokens: result.usage?.outputTokens ?? 0 },
+            usage: {
+              input_tokens: usage && Object.hasOwn(usage, "inputTokens") ? usage.inputTokens as number : 0,
+              output_tokens: usage && Object.hasOwn(usage, "outputTokens") ? usage.outputTokens as number : 0,
+            },
             model: effective,
           };
         },

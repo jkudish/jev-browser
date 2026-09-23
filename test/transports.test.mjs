@@ -83,6 +83,7 @@ test("facade validates the complete answer contract before usage can be credited
     await assert.rejects(() => askJev(carrier({ answers: mutated }), input), (error) => error.message.includes(`provider fixture question ${id}`) && reason.test(error.message));
   }
   await assert.rejects(() => askJev(carrier({ usage: { input_tokens: -1, output_tokens: 0 } }), input), /provider fixture question <response>.*usage/);
+  await assert.rejects(() => askJev(carrier({ usage: { input_tokens: undefined, output_tokens: 0 } }), input), /provider fixture question <response>.*usage/);
   await assert.rejects(() => askJev(carrier({ model: " " }), input), /provider fixture question <response>.*model/);
   const tied = { ...answers, item: { ...answers.item, choice: "alpha", probabilities: { alpha: 0.4995, beta: 0.5005 }, confidence: 0 } };
   assert.equal((await askJev(carrier({ answers: tied }), input)).answers.item.choice, "alpha");
@@ -185,6 +186,24 @@ test("Vercel factory forwards evaluate request and pure adaptation preserves con
   await assert.rejects(() => failing.create({ AI_GATEWAY_API_KEY: "ai-secret" }).ask(input), (error) => /Vercel AI Gateway HTTP 403/.test(error.message) && !/body-secret|ai-secret/.test(error.message));
   const malformed = createVercelDriver(async () => ({ ...result, answers: { item: raw.item } }));
   await assert.rejects(() => askJev(malformed.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input), /provider vercel question yes.*missing answer/);
+});
+
+test("all adapters distinguish absent usage from malformed containers and present null counters", async () => {
+  const vercelAnswers = { item: answers.item, yes: { type: "boolean", probability: answers.yes.noul } };
+  for (const [name, field, run] of [
+    ["typesafe", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(typesafe.create({ TYPESAFE_API_KEY: "ts-secret" }), input))],
+    ["openrouter", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input))],
+    ["cloudflare", "input_tokens", (wire) => withFetch(async () => Response.json({ result: { state: "Completed", result: { answers, ...wire } } }), () => askJev(cloudflare.create({ CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account" }), input))],
+    ["vercel", "inputTokens", (wire) => askJev(createVercelDriver(async () => ({ answers: vercelAnswers, ...wire })).create({ AI_GATEWAY_API_KEY: "ai-secret" }), input)],
+  ]) {
+    assert.deepEqual((await run({})).usage, { input_tokens: 0, output_tokens: 0 }, name);
+    assert.deepEqual((await run({ usage: {} })).usage, { input_tokens: 0, output_tokens: 0 }, name);
+    const invalidCases = [{ usage: "body-secret" }, { usage: null }, { usage: { [field]: null } }];
+    if (name === "vercel") invalidCases.push({ usage: { [field]: undefined } }); // JSON drops undefined properties on the HTTP drivers.
+    for (const invalid of invalidCases) {
+      await assert.rejects(() => run(invalid), (error) => /usage/.test(error.message) && !error.message.includes("body-secret"), `${name}: ${JSON.stringify(invalid)}`);
+    }
+  }
 });
 
 test("injected transport drives both call sites and malformed second-stage answer executes nothing", async () => {

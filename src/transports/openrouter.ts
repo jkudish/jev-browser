@@ -45,10 +45,17 @@ export const openrouter: BuiltinDriver = {
           throw new Error(`OpenRouter decisions API HTTP ${response.status} (invalid JSON; ${bytes} response bytes)`);
         }
         if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error(`OpenRouter decisions API HTTP ${response.status} (invalid envelope; ${bytes} response bytes)`);
+        const usage = body.usage;
+        if (usage !== undefined && (typeof usage !== "object" || usage === null || Array.isArray(usage))) {
+          throw new Error(`OpenRouter decisions API HTTP ${response.status} (invalid usage; ${bytes} response bytes)`);
+        }
         return {
           answers: body.answers,
           // The decisions endpoint does not document usage; absence means zero.
-          usage: { input_tokens: body.usage?.input_tokens ?? 0, output_tokens: body.usage?.output_tokens ?? 0 },
+          usage: {
+            input_tokens: usage && Object.hasOwn(usage, "input_tokens") ? usage.input_tokens : 0,
+            output_tokens: usage && Object.hasOwn(usage, "output_tokens") ? usage.output_tokens : 0,
+          },
           model: slug,
         };
       },

@@ -43,9 +43,16 @@ export const cloudflare: BuiltinDriver = {
           throw new Error(`Cloudflare AI run HTTP ${response.status} (non-Completed state; ${bytes} response bytes)`);
         }
         const payload = outer?.result ?? outer ?? body;
+        const usage = payload?.usage;
+        if (usage !== undefined && (typeof usage !== "object" || usage === null || Array.isArray(usage))) {
+          throw new Error(`Cloudflare AI run HTTP ${response.status} (invalid usage; ${bytes} response bytes)`);
+        }
         return {
           answers: payload?.answers,
-          usage: { input_tokens: payload?.usage?.input_tokens ?? 0, output_tokens: payload?.usage?.output_tokens ?? 0 },
+          usage: {
+            input_tokens: usage && Object.hasOwn(usage, "input_tokens") ? usage.input_tokens : 0,
+            output_tokens: usage && Object.hasOwn(usage, "output_tokens") ? usage.output_tokens : 0,
+          },
           model: payload?.model ?? slug,
         };
       },

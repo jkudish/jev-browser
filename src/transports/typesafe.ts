@@ -29,9 +29,16 @@ export const typesafe: BuiltinDriver = {
           const status = (error as { status?: unknown }).status;
           throw new Error(`TypeSafe API ${typeof status === "number" ? `HTTP ${status}` : "request failed"} (response omitted)`);
         }
+        const usage = response.usage;
+        if (usage !== undefined && (typeof usage !== "object" || usage === null || Array.isArray(usage))) {
+          throw new Error("TypeSafe API invalid usage (response omitted)");
+        }
         return {
           answers: response.answers,
-          usage: { input_tokens: response.usage?.input_tokens ?? 0, output_tokens: response.usage?.output_tokens ?? 0 },
+          usage: {
+            input_tokens: usage && Object.hasOwn(usage, "input_tokens") ? usage.input_tokens as number : 0,
+            output_tokens: usage && Object.hasOwn(usage, "output_tokens") ? usage.output_tokens as number : 0,
+          },
           model,
         };
       },
