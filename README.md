@@ -3,6 +3,10 @@
 [![CI](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src=".github/jev-browser-banner.png" alt="jev-browser — Fast and cheap browser use using TypeSafe's Jev model" />
+</p>
+
 Fast and very cheap browser use using TypeSafe's Jev model.
 
 Give jev-browser a task and a URL.
