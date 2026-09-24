@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { askJev, resolveTransport } from "../dist/provider.js";
-import { typesafe } from "../dist/transports/typesafe.js";
-import { openrouter } from "../dist/transports/openrouter.js";
-import { cloudflare } from "../dist/transports/cloudflare.js";
-import { createVercelDriver, adaptVercelAnswers } from "../dist/transports/vercel.js";
+import { askJev, InvalidJevAnswer, resolveTransport } from "../dist/provider.js";
 import { navigate } from "../dist/library.js";
 
 const signal = new AbortController().signal;
@@ -14,6 +10,7 @@ const answers = { item: { type: "choice", choice: "beta", probabilities: { alpha
 const input = { state: { title: "Example" }, questions, model: "jev-latest", signal };
 const usage = { input_tokens: 13, output_tokens: 3 };
 const carrier = (override = {}) => ({ name: "fixture", ask: async () => ({ answers, usage, model: "effective", ...override }) });
+const builtin = (name, env) => resolveTransport({ ...env, JEV_PROVIDER: name });
 
 async function withFetch(fn, run) {
   const original = globalThis.fetch;
@@ -80,7 +77,7 @@ test("facade validates the complete answer contract before usage can be credited
     [{ ...answers, item: { ...answers.item, confidence: Infinity } }, "item", /confidence/],
     [{ ...answers, yes: { type: "noul", noul: 1.1 } }, "yes", /noul/],
   ]) {
-    await assert.rejects(() => askJev(carrier({ answers: mutated }), input), (error) => error.message.includes(`provider fixture question ${id}`) && reason.test(error.message));
+    await assert.rejects(() => askJev(carrier({ answers: mutated }), input), (error) => error instanceof InvalidJevAnswer && error.message.includes(`provider fixture question ${id}`) && reason.test(error.message));
   }
   await assert.rejects(() => askJev(carrier({ usage: { input_tokens: -1, output_tokens: 0 } }), input), /provider fixture question <response>.*usage/);
   await assert.rejects(() => askJev(carrier({ usage: { input_tokens: undefined, output_tokens: 0 } }), input), /provider fixture question <response>.*usage/);
@@ -93,13 +90,23 @@ test("facade validates the complete answer contract before usage can be credited
   await assert.rejects(() => askJev(carrier({ answers: { rank: { ...scoreReply.rank, score: 3 } } }), score), /question rank.*score is outside/);
 });
 
+test("transport failure stays distinct from invalid answers and cancellation keeps its reason", async () => {
+  const failed = { name: "fixture", ask: async () => { throw new Error("body-secret"); } };
+  await assert.rejects(() => askJev(failed, input), (error) => !(error instanceof InvalidJevAnswer) && /request failed/.test(error.message) && !/body-secret/.test(error.message));
+
+  const controller = new AbortController();
+  const reason = new Error("deadline-exceeded");
+  const cancelled = { name: "fixture", ask: async () => { controller.abort(reason); throw reason; } };
+  await assert.rejects(() => askJev(cancelled, { ...input, signal: controller.signal }), (error) => error === reason);
+});
+
 test("TypeSafe client binds key and base URL at creation, forwards request and cancellation", async () => {
   const calls = [];
   await withFetch(async (url, init) => {
     calls.push({ url, init });
     return Response.json({ answers, usage });
   }, async () => {
-    const transport = typesafe.create({ TYPESAFE_API_KEY: "ts-secret", TYPESAFE_BASE_URL: "https://local.typesafe.test" });
+    const transport = builtin("typesafe", { TYPESAFE_API_KEY: "ts-secret", TYPESAFE_BASE_URL: "https://local.typesafe.test" });
     const reply = await askJev(transport, input);
     assert.deepEqual(reply.usage, usage);
     assert.equal(reply.model, "jev-latest");
@@ -111,7 +118,7 @@ test("TypeSafe client binds key and base URL at creation, forwards request and c
     assert.equal(calls[0].init.signal.aborted, false);
   });
   await withFetch(async () => Response.json({ error: "body-secret" }, { status: 400 }), async () => {
-    await assert.rejects(() => typesafe.create({ TYPESAFE_API_KEY: "ts-secret" }).ask(input), (error) => !/body-secret|ts-secret/.test(error.message) && /TypeSafe API HTTP 400/.test(error.message));
+    await assert.rejects(() => askJev(builtin("typesafe", { TYPESAFE_API_KEY: "ts-secret" }), input), (error) => !/body-secret|ts-secret/.test(error.message) && /request failed/.test(error.message) && !(error instanceof InvalidJevAnswer));
   });
 });
 
@@ -121,7 +128,7 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
     calls.push({ url, init });
     return Response.json({ answers, usage });
   }, async () => {
-    const transport = openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" });
+    const transport = builtin("openrouter", { OPENROUTER_API_KEY: "sk-or-secret" });
     assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13");
     assert.equal((await askJev(transport, { ...input, model: "typesafe/jev-1.12" })).model, "typesafe/jev-1.12");
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
@@ -132,14 +139,14 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
   });
   for (const response of [new Response("body-secret", { status: 403 }), new Response("body-secret", { status: 200 })]) {
     await withFetch(async () => response, async () => {
-      await assert.rejects(() => openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }).ask(input), (error) => /OpenRouter decisions API HTTP/.test(error.message) && !/body-secret|sk-or-secret/.test(error.message));
+      await assert.rejects(() => askJev(builtin("openrouter", { OPENROUTER_API_KEY: "sk-or-secret" }), input), (error) => /request failed/.test(error.message) && !/body-secret|sk-or-secret/.test(error.message));
     });
   }
   await withFetch(async () => Response.json({ usage }), async () => {
-    await assert.rejects(() => askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input), /question <response>.*answers/);
+    await assert.rejects(() => askJev(builtin("openrouter", { OPENROUTER_API_KEY: "sk-or-secret" }), input), /question <response>.*answers/);
   });
   await withFetch(async () => { throw new Error("body-secret sk-or-secret"); }, async () => {
-    await assert.rejects(() => openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }).ask(input), (error) => /HTTP unavailable.*network error/.test(error.message) && !/body-secret|sk-or-secret/.test(error.message));
+    await assert.rejects(() => askJev(builtin("openrouter", { OPENROUTER_API_KEY: "sk-or-secret" }), input), (error) => /request failed/.test(error.message) && !/body-secret|sk-or-secret/.test(error.message) && !(error instanceof InvalidJevAnswer));
   });
 });
 
@@ -150,7 +157,7 @@ test("Cloudflare token priority, double envelope, state, usage, and safe errors"
     calls.push({ url, init });
     return Response.json({ success: true, result: { state: "Completed", result: { answers, usage, model: "typesafe/jev" } } });
   }, async () => {
-    const transport = cloudflare.create(env);
+    const transport = builtin("cloudflare", env);
     assert.deepEqual((await askJev(transport, input)).usage, usage);
     assert.equal(calls[0].url, "https://api.cloudflare.com/client/v4/accounts/account/ai/run");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer high-secret", "Content-Type": "application/json" });
@@ -161,47 +168,51 @@ test("Cloudflare token priority, double envelope, state, usage, and safe errors"
   });
   for (const response of [new Response("body-secret", { status: 401 }), Response.json({ success: false, errors: ["body-secret"] }), Response.json({ result: { state: "Failed body-secret" } }), new Response("body-secret", { status: 200 })]) {
     await withFetch(async () => response, async () => {
-      await assert.rejects(() => cloudflare.create(env).ask(input), (error) => /Cloudflare AI run HTTP/.test(error.message) && !/body-secret|high-secret|low-secret/.test(error.message));
+      await assert.rejects(() => askJev(builtin("cloudflare", env), input), (error) => /request failed/.test(error.message) && !/body-secret|high-secret|low-secret/.test(error.message));
     });
   }
   await withFetch(async () => { throw new Error("body-secret high-secret"); }, async () => {
-    await assert.rejects(() => cloudflare.create(env).ask(input), (error) => /HTTP unavailable.*network error/.test(error.message) && !/body-secret|high-secret/.test(error.message));
+    await assert.rejects(() => askJev(builtin("cloudflare", env), input), (error) => /request failed/.test(error.message) && !/body-secret|high-secret/.test(error.message) && !(error instanceof InvalidJevAnswer));
   });
 });
 
-test("Vercel factory forwards evaluate request and pure adaptation preserves confidence", async () => {
+test("Vercel forwards evaluation request and adapts boolean and confidence", async () => {
   let call;
   const raw = { item: { type: "choice", choice: "beta", probabilities: { alpha: 0.2, beta: 0.8 } }, yes: { type: "boolean", probability: 0.7 } };
   const result = { answers: raw, usage: { inputTokens: 13, outputTokens: 3 }, providerMetadata: { typesafe: { confidence: { item: 0.92 } } } };
-  const factory = createVercelDriver(async (args) => { call = args; return result; });
-  const reply = await askJev(factory.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input);
-  assert.equal(reply.model, "typesafe-ai/jev");
-  assert.deepEqual(reply.usage, usage);
-  assert.equal(call.abortSignal, signal);
-  assert.equal(call.model.modelId, "typesafe-ai/jev");
-  assert.deepEqual(call.questions, { item: { type: "choice", instructions: undefined, criteria: questions.item.criteria }, yes: { type: "boolean", instructions: undefined, criteria: undefined } });
-  assert.deepEqual(reply.answers, { item: { ...answers.item, confidence: 0.92 }, yes: answers.yes });
-  assert.deepEqual(adaptVercelAnswers({ yes: raw.yes, rank: { type: "score", score: 1, probabilities: { "0": 0.2, "1": 0.8 } } }, {}), { yes: answers.yes, rank: { type: "score", score: 1, probabilities: { "0": 0.2, "1": 0.8 }, confidence: null } });
-  const failing = createVercelDriver(async () => { throw Object.assign(new Error("body-secret"), { statusCode: 403 }); });
-  await assert.rejects(() => failing.create({ AI_GATEWAY_API_KEY: "ai-secret" }).ask(input), (error) => /Vercel AI Gateway HTTP 403/.test(error.message) && !/body-secret|ai-secret/.test(error.message));
-  const malformed = createVercelDriver(async () => ({ ...result, answers: { item: raw.item } }));
-  await assert.rejects(() => askJev(malformed.create({ AI_GATEWAY_API_KEY: "ai-secret" }), input), /provider vercel question yes.*missing answer/);
+  const transport = builtin("vercel", { AI_GATEWAY_API_KEY: "ai-secret" });
+  await withFetch(async (url, init) => { call = { url, init }; return Response.json(result); }, async () => {
+    const reply = await askJev(transport, input);
+    assert.equal(reply.model, "typesafe-ai/jev");
+    assert.deepEqual(reply.usage, usage);
+    assert.equal(call.url, "https://ai-gateway.vercel.sh/v4/ai/evaluation-model");
+    assert.equal(call.init.signal, signal);
+    assert.equal(call.init.headers.Authorization, "Bearer ai-secret");
+    assert.equal(call.init.headers["ai-model-id"], "typesafe-ai/jev");
+    assert.deepEqual(JSON.parse(call.init.body), { state: input.state, questions: { item: { type: "choice", criteria: questions.item.criteria }, yes: { type: "boolean" } } });
+    assert.deepEqual(reply.answers, { item: { ...answers.item, confidence: 0.92 }, yes: answers.yes });
+  });
+  await withFetch(async () => Response.json({ ...result, answers: { item: raw.item } }), async () => {
+    await assert.rejects(() => askJev(transport, input), (error) => error instanceof InvalidJevAnswer && /question yes.*missing answer/.test(error.message));
+  });
+  await withFetch(async () => new Response("body-secret", { status: 403 }), async () => {
+    await assert.rejects(() => askJev(transport, input), (error) => !(error instanceof InvalidJevAnswer) && /request failed/.test(error.message) && !/body-secret|ai-secret/.test(error.message));
+  });
 });
 
 test("all adapters distinguish absent usage from malformed containers and present null counters", async () => {
   const vercelAnswers = { item: answers.item, yes: { type: "boolean", probability: answers.yes.noul } };
   for (const [name, field, run] of [
-    ["typesafe", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(typesafe.create({ TYPESAFE_API_KEY: "ts-secret" }), input))],
-    ["openrouter", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(openrouter.create({ OPENROUTER_API_KEY: "sk-or-secret" }), input))],
-    ["cloudflare", "input_tokens", (wire) => withFetch(async () => Response.json({ result: { state: "Completed", result: { answers, ...wire } } }), () => askJev(cloudflare.create({ CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account" }), input))],
-    ["vercel", "inputTokens", (wire) => askJev(createVercelDriver(async () => ({ answers: vercelAnswers, ...wire })).create({ AI_GATEWAY_API_KEY: "ai-secret" }), input)],
+    ["typesafe", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(builtin("typesafe", { TYPESAFE_API_KEY: "ts-secret" }), input))],
+    ["openrouter", "input_tokens", (wire) => withFetch(async () => Response.json({ answers, ...wire }), () => askJev(builtin("openrouter", { OPENROUTER_API_KEY: "sk-or-secret" }), input))],
+    ["cloudflare", "input_tokens", (wire) => withFetch(async () => Response.json({ result: { state: "Completed", result: { answers, ...wire } } }), () => askJev(builtin("cloudflare", { CLOUDFLARE_API_TOKEN: "cf-secret", CLOUDFLARE_ACCOUNT_ID: "account" }), input))],
+    ["vercel", "inputTokens", (wire) => withFetch(async () => Response.json({ answers: vercelAnswers, ...wire }), () => askJev(builtin("vercel", { AI_GATEWAY_API_KEY: "ai-secret" }), input))],
   ]) {
     assert.deepEqual((await run({})).usage, { input_tokens: 0, output_tokens: 0 }, name);
     assert.deepEqual((await run({ usage: {} })).usage, { input_tokens: 0, output_tokens: 0 }, name);
     const invalidCases = [{ usage: "body-secret" }, { usage: null }, { usage: { [field]: null } }];
-    if (name === "vercel") invalidCases.push({ usage: { [field]: undefined } }); // JSON drops undefined properties on the HTTP drivers.
     for (const invalid of invalidCases) {
-      await assert.rejects(() => run(invalid), (error) => /usage/.test(error.message) && !error.message.includes("body-secret"), `${name}: ${JSON.stringify(invalid)}`);
+      await assert.rejects(() => run(invalid), (error) => /usage|request failed/.test(error.message) && !error.message.includes("body-secret"), `${name}: ${JSON.stringify(invalid)}`);
     }
   }
 });
