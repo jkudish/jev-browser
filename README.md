@@ -428,6 +428,19 @@ With no provider at all, or when the typing model fails or returns empty text, t
 
 ## Configuration
 
+### Providers
+
+Jev judgments ride on the shared [@jkudish/jev-agent-tools](https://github.com/jkudish/jev-agent-tools) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Four carriers are built in, tried in this order:
+
+- **TypeSafe** (`TYPESAFE_API_KEY`): direct, and the default when set.
+- **OpenRouter** (`OPENROUTER_API_KEY`): one key can also run the typing model.
+- **Cloudflare Workers AI** (`CLOUDFLARE_API_TOKEN` or `JEV_CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`).
+- **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`).
+
+`JEV_PROVIDER` forces one of them; an unknown name or a missing credential is a configuration error, never a silent fallback. Typing is configured separately with `JEV_BROWSER_TYPE_*`.
+
+The built-ins stay limited to major providers. For anything else, library callers can inject a transport ([Judgment transports in the library](#judgment-transports-in-the-library)), use a published third-party driver package, or publish their own; published drivers get linked here on request. The [add-a-provider guide](https://github.com/jkudish/jev-agent-tools#adding-a-provider) covers all three paths.
+
 | Env var | Default | Purpose |
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | none | TypeSafe direct. Default provider when set. |
@@ -454,13 +467,9 @@ With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set (and no other provid
 
 With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typing provider) the typing model run through OpenRouter: one key powers the whole package. The Jev endpoint there is alpha and adds a hop, and it serves pinned versions rather than a `latest` alias, so `jev-latest` maps to `typesafe/jev-1.13`. Direct TypeSafe remains the recommended default when you have both keys.
 
-### Adding a provider
-
-The built-in four cover TypeSafe, OpenRouter, Cloudflare, and Vercel. Anything else plugs in without forking: library callers inject a `JevTransport` (see [Judgment transports in the library](#judgment-transports-in-the-library)), and the [add-a-provider guide](https://github.com/jkudish/jev-agent-tools#adding-a-provider) in the shared package walks through both that path and what a built-in carrier PR needs.
-
 ## Also in the family
 
-Need the judgments without the browser? [Jev MCP](https://github.com/jkudish/jev-mcp) exposes the same model as eight judgment tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, find and rerank by meaning, batch-classify, decide, compare passages, and extract fields. The npm package is [@jkudish/jev-mcp](https://www.npmjs.com/package/@jkudish/jev-mcp).
+Need the judgments without the browser? [Jev MCP](https://github.com/jkudish/jev-mcp) exposes the same model as ten judgment tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, find and rerank by meaning, batch-classify, decide, compare passages, extract fields, and review or gate patches and completion claims. The npm package is [@jkudish/jev-mcp](https://www.npmjs.com/package/@jkudish/jev-mcp).
 
 ## Sponsoring
 
