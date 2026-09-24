@@ -58,6 +58,7 @@
     "@ai-sdk/google": "2.0.9",
     "@ai-sdk/openai": "^2.0.0",
     "@ai-sdk/openai-compatible": "^1.0.0",
+    "@jkudish/jev-agent-tools": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@typesafe-ai/sdk": "^0.6.0",
     "ai": "^7.0.105",
