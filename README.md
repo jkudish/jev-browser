@@ -469,7 +469,7 @@ With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typ
 
 ## Also in the family
 
-Need the judgments without the browser? [Jev MCP](https://github.com/jkudish/jev-mcp) exposes the same model as ten judgment tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, find and rerank by meaning, batch-classify, decide, compare passages, extract fields, and review or gate patches and completion claims. The npm package is [@jkudish/jev-mcp](https://www.npmjs.com/package/@jkudish/jev-mcp).
+Need the judgments without the browser? [Jev MCP](https://github.com/jkudish/jev-mcp) exposes the same model as eleven judgment tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, gauge bare propositions, find and rerank by meaning, batch-classify, decide, compare passages, extract fields, and review or gate patches and completion claims. The npm package is [@jkudish/jev-mcp](https://www.npmjs.com/package/@jkudish/jev-mcp).
 
 ## Sponsoring
 

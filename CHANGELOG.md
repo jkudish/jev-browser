@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Docs: Providers section in the README, aligned install requirements, and the Jev MCP family reference updated to eleven tools.
+
 ## 0.6.0
 
 - Judgment transport now uses `@jkudish/jev-agent-tools` for provider selection and answer validation; browser run errors remain fail-loud.
