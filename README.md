@@ -152,7 +152,7 @@ console.log(result.page.content);
 
 ### Judgment transports in the library
 
-The built-in Jev transports are TypeSafe, OpenRouter, Cloudflare, and Vercel, selected in that order from configured credentials. `JEV_PROVIDER` forces one of them; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
+The built-in Jev transports are TypeSafe, OpenRouter, Cloudflare, and Vercel, selected in that order from configured credentials. Selection and answer validation live in the shared [@jkudish/jev-agent-tools](https://github.com/jkudish/jev-agent-tools) package. `JEV_PROVIDER` forces one of them; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
 
 ```ts
 import { navigate, type JevTransport } from "@jkudish/jev-browser";
@@ -432,7 +432,7 @@ With no provider at all, or when the typing model fails or returns empty text, t
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | none | TypeSafe direct. Default provider when set. |
 | `OPENROUTER_API_KEY` | none | Powers both the Jev judgments (when `TYPESAFE_API_KEY` is absent) and, optionally, the typing model. One key runs everything. |
-| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. |
+| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. `JEV_CLOUDFLARE_API_TOKEN` is honored first for separate credentials. |
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway for Jev judgments after the other providers. |
 | `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. |
@@ -453,6 +453,10 @@ With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set (and no other provid
 ### OpenRouter
 
 With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typing provider) the typing model run through OpenRouter: one key powers the whole package. The Jev endpoint there is alpha and adds a hop, and it serves pinned versions rather than a `latest` alias, so `jev-latest` maps to `typesafe/jev-1.13`. Direct TypeSafe remains the recommended default when you have both keys.
+
+### Adding a provider
+
+The built-in four cover TypeSafe, OpenRouter, Cloudflare, and Vercel. Anything else plugs in without forking: library callers inject a `JevTransport` (see [Judgment transports in the library](#judgment-transports-in-the-library)), and the [add-a-provider guide](https://github.com/jkudish/jev-agent-tools#adding-a-provider) in the shared package walks through both that path and what a built-in carrier PR needs.
 
 ## Also in the family
 
