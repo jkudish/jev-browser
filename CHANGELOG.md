@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Typing providers upgraded to the AI SDK 7 provider packages (v4), which removes the HIGH undici advisory from the dependency tree; Gemini Flash typing no longer returns empty text because reasoning consumed the output budget. Via [#19](https://github.com/jkudish/jev-browser/pull/19).
+- Internal: zod 4 and TypeScript 7. Advertised input schemas drop `additionalProperties: false` under zod 4's JSON Schema conversion; unknown keys are still stripped at runtime. Via [#19](https://github.com/jkudish/jev-browser/pull/19).
+- Dependency updates across the board, including `@ai-sdk/google` 2.0.99.
+- Ships an agent skill inside the package: `skills/jev-browser/` is included in the npm tarball, so coding agents get `jev_navigate` usage policy — when a real browser beats a static fetch, evidence-grade recording — without hand-written prompts.
+
 ## 0.6.1
 
 - Docs: Providers section in the README, aligned install requirements, and the Jev MCP family reference updated to eleven tools.
