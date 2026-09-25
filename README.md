@@ -119,6 +119,18 @@ args = ["-y", "@jkudish/jev-browser"]
 
 Some MCP clients filter the environment before spawning servers, which silently drops `TYPESAFE_API_KEY`. If the server reports a missing key, pass it explicitly as shown above.
 
+### Agent skill
+
+The package ships an agent skill (`skills/jev-browser/`) that teaches coding agents when to call `jev_navigate` instead of a static fetch, how to read budgets, statuses, and the judgment trace, and how logins work without leaking secrets. Copy it into your client's skills directory:
+
+```bash
+npm pack @jkudish/jev-browser@latest
+tar -xzf jkudish-jev-browser-*.tgz
+mkdir -p .claude/skills && cp -R package/skills/jev-browser .claude/skills/
+```
+
+Claude Code reads `.claude/skills`, OpenCode `.opencode/skills`, and Codex and generic agents `.agents/skills`. In Amp, the skill's frontmatter bundles the MCP server, so dropping it into a skills directory wires up both.
+
 ## Without MCP: CLI and library
 
 The same agent runs from the command line. Result JSON is printed to stdout.
