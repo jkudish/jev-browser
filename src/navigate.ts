@@ -176,8 +176,8 @@ export function createTypingGenerator(env: NodeJS.ProcessEnv = process.env): Typ
       return {
         provider: "google",
         modelId: selection.modelId,
-        // @ai-sdk/google@2 speaks model spec v2, matching the ai@7 core; no
-        // compatibility cast is needed or wanted here.
+        // Every @ai-sdk provider here implements model spec v4, the native
+        // spec of the ai@7 core, so no compatibility cast is needed or wanted.
         model: createGoogleGenerativeAI({
           apiKey: (env.GOOGLE_GENERATIVE_AI_API_KEY ?? env.GEMINI_API_KEY)!,
           ...(selection.baseUrl ? { baseURL: selection.baseUrl } : {}),

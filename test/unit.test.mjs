@@ -996,6 +996,23 @@ test("generateTextToType: the google provider generates without a compatibility 
   }
 });
 
+test("createTypingGenerator: every provider builds a native spec-v4 model (no ai@7 compatibility mode)", () => {
+  const cases = [
+    { OPENAI_API_KEY: "sk-openai-key-0123456789" },
+    { OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" },
+    { JEV_BROWSER_TYPE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-anthropic-key-0123456789" },
+    { GEMINI_API_KEY: "AIza-google-key-0123456789" },
+    { JEV_BROWSER_TYPE_BASE_URL: "http://typing.test/v1", JEV_BROWSER_TYPE_MODEL: "local-model" },
+  ];
+  const seen = new Set();
+  for (const env of cases) {
+    const generator = createTypingGenerator(env);
+    seen.add(generator.provider);
+    assert.equal(generator.model.specificationVersion, "v4", `${generator.provider} model is not spec v4`);
+  }
+  assert.equal(seen.size, cases.length); // each case reached a distinct provider branch
+});
+
 // ── detectBotProtection ─────────────────────────────────────────────────────
 // The scoring rules: a cf-mitigated header or a known challenge title is
 // decisive on its own; body markers need three to stand alone, so an article
