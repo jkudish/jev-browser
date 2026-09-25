@@ -970,7 +970,7 @@ test("generateTextToType: BASE_URL routes every named provider to the configured
   }
 });
 
-test("generateTextToType: the google provider generates without a compatibility cast", async () => {
+test("generateTextToType: google switches thinking off and raises the cap", async () => {
   const realFetch = globalThis.fetch;
   let seen;
   globalThis.fetch = async (url, init) => {
@@ -986,11 +986,19 @@ test("generateTextToType: the google provider generates without a compatibility 
     const out = await generateTextToType(new AbortController().signal, generator, "task", "the search box", "https://x.test/");
     assert.deepEqual(out, { ok: true, text: "ristretto", via: "google" });
     assert.match(seen.url, /generativelanguage\.googleapis\.com/);
-    assert.equal(seen.body.generationConfig.maxOutputTokens, 48); // tight cap, no openrouter options
-    // google models reasoning controls via generationConfig.thinkingConfig; the
-    // openrouter reasoning namespace must not leak into any google request
-    assert.equal(seen.body.generationConfig.thinkingConfig, undefined);
+    // Gemini thinks by default and can spend a 48-token cap on hidden thoughts,
+    // returning nothing: thinking is switched off (budget 0 on 2.5) and the
+    // cap raised, via generationConfig.thinkingConfig. The openrouter
+    // reasoning namespace must not leak into any google request.
+    assert.equal(seen.body.generationConfig.maxOutputTokens, 256);
+    assert.deepEqual(seen.body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
     assert.equal(seen.body.generationConfig.reasoning, undefined);
+    assert.equal(seen.body.reasoning, undefined);
+
+    // Gemini 3 cannot disable thinking; "none" maps to its minimum level
+    const gemini3 = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", JEV_BROWSER_TYPE_MODEL: "gemini-3-flash" });
+    await generateTextToType(new AbortController().signal, gemini3, "task", "the search box", "https://x.test/");
+    assert.deepEqual(seen.body.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
   } finally {
     globalThis.fetch = realFetch;
   }

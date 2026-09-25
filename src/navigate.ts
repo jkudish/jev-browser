@@ -211,17 +211,22 @@ export async function generateTextToType(
   elementDescription: string,
   url: string,
 ): Promise<TypingTextResult> {
-  // OpenRouter reasoning models can burn the whole budget on hidden reasoning
-  // tokens and return an empty message, so reasoning is disabled there and
-  // the output budget raised; other providers keep the tight cap.
-  const openrouter = generator.provider === "openrouter";
+  // Reasoning models (OpenRouter's, and Gemini, which thinks by default) can
+  // burn the whole budget on hidden reasoning tokens and return an empty
+  // message, so reasoning is disabled there and the output budget raised;
+  // other providers keep the tight cap. Gemini 3 cannot fully disable
+  // thinking ("none" maps to its minimum level), hence the headroom.
+  const generationLimits =
+    generator.provider === "openrouter"
+      ? { maxOutputTokens: 256, providerOptions: { openrouter: { reasoning: { enabled: false } } } }
+      : generator.provider === "google"
+        ? { maxOutputTokens: 256, reasoning: "none" as const }
+        : { maxOutputTokens: 48 };
   try {
     const { text, finishReason } = await generateText({
       model: generator.model,
       prompt: `A browser agent is performing this task: "${task}". It must type into the ${elementDescription} on ${url}. Reply with ONLY the exact text to type (for a search box: a short search query; no quotes, no explanation).`,
-      ...(openrouter
-        ? { maxOutputTokens: 256, providerOptions: { openrouter: { reasoning: { enabled: false } } } }
-        : { maxOutputTokens: 48 }),
+      ...generationLimits,
       abortSignal: signal,
     });
     const cleaned = text.trim().replace(/^["']|["']$/g, "");

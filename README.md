@@ -392,7 +392,7 @@ Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired)
 
 ## The typing model
 
-Jev never generates text. It returns typed decisions only: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs once per typed field, so a multi-field form makes one call per field. Each call is capped at 256 output tokens on OpenRouter (reasoning is disabled there, since reasoning models can burn the whole budget on hidden tokens and return empty text) and 48 tokens on every other provider.
+Jev never generates text. It returns typed decisions only: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs once per typed field, so a multi-field form makes one call per field. Each call is capped at 256 output tokens on OpenRouter and Google, with reasoning disabled there (reasoning models can burn the whole budget on hidden tokens and return empty text; Gemini 3 models keep their minimum thinking level), and 48 tokens on every other provider.
 
 `JEV_PROVIDER` is not involved here at all: it selects the transport for the Jev judgments and has nothing to do with typing. Typing configuration is a separate set of variables.
 
