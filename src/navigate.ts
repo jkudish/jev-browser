@@ -194,6 +194,11 @@ export function createTypingGenerator(env: NodeJS.ProcessEnv = process.env): Typ
   }
 }
 
+// Gemini Flash families whose thinking can be switched off (2.5) or dropped to
+// a minimum level (3+) through the AI SDK's reasoning: "none". Pro models
+// cannot go that low and pre-2.5 models have no thinking configuration.
+const GEMINI_FLASH_THINKING_OFF = /^(models\/)?gemini-(2\.5|[3-9](\.\d+)?)-flash|^(models\/)?gemini-flash(-lite)?-latest$/;
+
 export type TypingTextResult =
   | { ok: true; text: string; via: string }
   | { ok: false; code: TypingWarningCode; message: string; finishReason?: string };
@@ -214,13 +219,15 @@ export async function generateTextToType(
   // Reasoning models (OpenRouter's, and Gemini, which thinks by default) can
   // burn the whole budget on hidden reasoning tokens and return an empty
   // message, so reasoning is disabled there and the output budget raised;
-  // other providers keep the tight cap. Gemini 3 cannot fully disable
-  // thinking ("none" maps to its minimum level), hence the headroom.
+  // other providers keep the tight cap. On Google only Gemini Flash models
+  // accept the "none" mapping (budget 0 on 2.5, minimum level on 3+, which
+  // still thinks a little, hence the headroom); Pro and older models reject
+  // it, so they keep their default thinking and just get the larger cap.
   const generationLimits =
     generator.provider === "openrouter"
       ? { maxOutputTokens: 256, providerOptions: { openrouter: { reasoning: { enabled: false } } } }
       : generator.provider === "google"
-        ? { maxOutputTokens: 256, reasoning: "none" as const }
+        ? { maxOutputTokens: 256, ...(GEMINI_FLASH_THINKING_OFF.test(generator.modelId) ? { reasoning: "none" as const } : {}) }
         : { maxOutputTokens: 48 };
   try {
     const { text, finishReason } = await generateText({

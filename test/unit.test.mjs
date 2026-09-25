@@ -999,6 +999,22 @@ test("generateTextToType: google switches thinking off and raises the cap", asyn
     const gemini3 = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", JEV_BROWSER_TYPE_MODEL: "gemini-3-flash" });
     await generateTextToType(new AbortController().signal, gemini3, "task", "the search box", "https://x.test/");
     assert.deepEqual(seen.body.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
+
+    // Only Flash families get the override: Pro models reject budget 0 (2.5)
+    // and "minimal" (3.x), and pre-2.5 models have no thinking config at all.
+    // They keep their default thinking and only take the raised cap.
+    const cases = [
+      ["gemini-2.5-flash-lite", { thinkingBudget: 0 }],
+      ["gemini-2.5-pro", undefined],
+      ["gemini-3.1-pro-preview", undefined],
+      ["gemini-2.0-flash", undefined],
+    ];
+    for (const [model, thinkingConfig] of cases) {
+      const g = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", JEV_BROWSER_TYPE_MODEL: model });
+      await generateTextToType(new AbortController().signal, g, "task", "the search box", "https://x.test/");
+      assert.deepEqual(seen.body.generationConfig.thinkingConfig, thinkingConfig, model);
+      assert.equal(seen.body.generationConfig.maxOutputTokens, 256, model);
+    }
   } finally {
     globalThis.fetch = realFetch;
   }
