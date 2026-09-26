@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- Opt-in stateless Streamable HTTP: `jev-browser --http` (or `JEV_BROWSER_TRANSPORT=http`) serves MCP 2026-07-28 per request and 2025-era clients through the SDK's stateless fallback, with no sessions, on `PORT` (default 8080) at `/mcp`, with `/health`. `HOST` defaults to loopback; binding beyond it is explicit. `JEV_BROWSER_AUTH_TOKEN` gates it with a bearer token and is required unless `HOST` is loopback; Host/Origin rebinding guards answer fixed-string 403s. Concurrent requests are capped at `JEV_BROWSER_MAX_CONCURRENCY` (default 4, since each in-flight call holds a headless Chromium) with `429` backpressure, and a client that disconnects mid call aborts its navigation and frees the slot. The tool list is static: no `listChanged` is advertised and `subscriptions/listen` is refused, so an idle listener cannot occupy a slot. `jev_navigate`'s `max_chars` is capped at 1,000,000. Stdio stays the default.
+- Internal: `@modelcontextprotocol/sdk` 1.x replaced by the v2 packages `@modelcontextprotocol/server` and `@modelcontextprotocol/node` 2.1.0; the tool registers once and a fresh server replays it per connection or request.
+- Dependency updates: `@ai-sdk/openai` 4.0.78 and `ai` 7.0.116.
+
 ## 0.7.0
 
 - Typing providers upgraded to the AI SDK 7 provider packages (v4), which removes the HIGH undici advisory from the dependency tree; Gemini Flash typing no longer returns empty text because reasoning consumed the output budget. Via [#19](https://github.com/jkudish/jev-browser/pull/19).
