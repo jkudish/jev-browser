@@ -119,6 +119,24 @@ args = ["-y", "@jkudish/jev-browser"]
 
 Some MCP clients filter the environment before spawning servers, which silently drops `TYPESAFE_API_KEY`. If the server reports a missing key, pass it explicitly as shown above.
 
+### Remote / HTTP
+
+Stdio is the default. To host one shared server for a team or a remote agent, run it in stateless HTTP mode:
+
+```bash
+JEV_BROWSER_AUTH_TOKEN="$(openssl rand -hex 32)" TYPESAFE_API_KEY=ts_... npx -y @jkudish/jev-browser --http
+```
+
+It listens on `PORT` (default `8080`) and serves MCP at `/mcp`, with a health check at `/health`. `HOST` defaults to `127.0.0.1`; set `HOST=0.0.0.0` explicitly to serve beyond your machine. It speaks MCP 2026-07-28 and falls back to stateless serving for 2025-era clients, so it keeps no sessions and any number of replicas can sit behind a plain load balancer. Every call spends your Jev key and drives a real browser, so `JEV_BROWSER_AUTH_TOKEN` is required unless `HOST` is loopback. Clients send it as a bearer token:
+
+```bash
+claude mcp add --transport http jev-browser https://jev-browser.example.com/mcp --header "Authorization: Bearer $JEV_BROWSER_AUTH_TOKEN"
+```
+
+Two browser-specific limits shape how you deploy it. Each in-flight call runs its own headless Chromium for up to its time budget (`max_seconds`, default 180, cap 600), so admitted requests are capped at `JEV_BROWSER_MAX_CONCURRENCY` (default 4; excess gets `429`) and each replica needs memory for that many browsers. And a navigation can legitimately take minutes: give your reverse proxy or load balancer read timeouts at least as long as the largest `max_seconds` you allow, or it will cut healthy runs short. Client libraries cap requests too (60 seconds by default in the TypeScript SDK): raise your client's tool-call timeout to match the budgets you allow.
+
+The server itself speaks plain HTTP: terminate TLS at a reverse proxy or load balancer before exposing it beyond loopback, and put connection limits and request rate limits at that ingress. The process bounds admitted `/mcp` requests and caps request bodies at 4 MiB, but it does not limit sockets waiting to finish headers or repeatedly rejected requests.
+
 ### Agent skill
 
 The package ships an agent skill (`skills/jev-browser/`) that teaches coding agents when to call `jev_navigate` instead of a static fetch, how to read budgets, statuses, and the judgment trace, and how logins work without leaking secrets. Copy it into your client's skills directory:

@@ -5,8 +5,8 @@ import { spawn } from "node:child_process";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { chromium } from "playwright";
 import { navigate } from "../dist/navigate.js";
 
@@ -1630,5 +1630,68 @@ test("CLI: malformed --cookie-file arguments fail without echoing the argument",
     assert.notEqual(code, 0, `expected a nonzero exit for ${spec.includes("=") ? "name=value" : "bare"} misuse, stderr: ${stderr}`);
     assert.ok(!stderr.includes(RAW), `the malformed spec leaked back to stderr: ${stderr}`);
     assert.ok(!stderr.trimEnd().includes("\n"), `errors must stay one line: ${JSON.stringify(stderr)}`);
+  }
+});
+
+test("stateless HTTP: real navigation with a screenshot through --http (2026-07-28 client)", { skip: !hasKey }, async () => {
+  const site = await startFixtureSite();
+  const TOKEN = "e2e-http-token-0123456789abcdef";
+  const child = spawn(process.execPath, [serverPath, "--http"], {
+    env: {
+      ...process.env,
+      TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY ?? "",
+      HOST: "127.0.0.1",
+      PORT: "0",
+      JEV_BROWSER_AUTH_TOKEN: TOKEN,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  const url = await new Promise((resolve, reject) => {
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      const match = stderr.match(/stateless HTTP at (\S+)/);
+      if (match) resolve(new URL(match[1]));
+    });
+    child.once("exit", (code) => reject(new Error(`server exited ${code}: ${stderr}`)));
+  });
+  try {
+    const client = new Client(
+      { name: "jev-browser-http-e2e", version: "0.1.0" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+    await client.connect(
+      new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } } }),
+      { timeout: 60_000 },
+    );
+    try {
+      assert.equal(client.getProtocolEra(), "modern");
+      const result = await client.callTool(
+        {
+          name: "jev_navigate",
+          arguments: {
+            task: "Read the page and report the coffee list shown on it, then stop.",
+            start_url: `${site.baseUrl}/mitigated`,
+            max_steps: 3,
+            max_seconds: 90,
+          },
+        },
+        undefined,
+        { timeout: 150_000 },
+      );
+      const body = payload(result);
+      assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}`);
+      // The screenshot must survive the stateless HTTP leg as an image block.
+      const image = result.content.find((b) => b.type === "image");
+      assert.ok(image, "expected a screenshot image block over HTTP");
+      assert.equal(image.mimeType, "image/jpeg");
+      assert.ok(image.data.length > 1000, "screenshot payload suspiciously small");
+    } finally {
+      await client.close();
+    }
+  } finally {
+    child.kill("SIGTERM");
+    site.close();
   }
 });

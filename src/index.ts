@@ -3,8 +3,7 @@
 //   jev-browser run "<task>" <url> [options]   CLI
 //   jev-browser                                 MCP stdio server
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createRequire } from "node:module";
 import { navigate } from "./navigate.js";
@@ -30,7 +29,27 @@ if (process.argv[2] === "--help" || process.argv[2] === "-h") {
 // Resolved at runtime so the MCP handshake version always matches the package.
 const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as { version: string };
 
-const server = new McpServer({ name: "jev-browser", version: packageVersion });
+// Tools are declared once at module scope and replayed onto a fresh McpServer
+// per stdio connection or per stateless HTTP request (see createServer below).
+type RegisterTool = McpServer["registerTool"];
+const toolRegistrations: Parameters<RegisterTool>[] = [];
+const server = {
+  registerTool: ((...args: Parameters<RegisterTool>) => {
+    toolRegistrations.push(args);
+  }) as unknown as RegisterTool,
+};
+
+export function createServer(): McpServer {
+  // The tool list is static, so it advertises no listChanged capability and
+  // no client has a reason to hold a subscriptions/listen stream open (which
+  // would otherwise occupy an HTTP concurrency slot without doing any work).
+  const instance = new McpServer(
+    { name: "jev-browser", version: packageVersion },
+    { capabilities: { tools: { listChanged: false } } },
+  );
+  for (const args of toolRegistrations) (instance.registerTool as (...a: Parameters<RegisterTool>) => unknown)(...args);
+  return instance;
+}
 
 server.registerTool(
   "jev_navigate",
@@ -66,7 +85,7 @@ server.registerTool(
           "Final page payload format: text (default, 8k chars), markdown (16k, via turndown), " +
             "html (1MB, for app-side parsing), aria (16k, Playwright aria snapshot YAML).",
         ),
-      max_chars: z.number().int().min(100).optional().describe("Override the format's default character cap."),
+      max_chars: z.number().int().min(100).max(1_000_000).optional().describe("Override the format's default character cap (at most 1,000,000, the html format's default)."),
       screenshot: z.enum(["final", "none"]).optional().describe("Final viewport JPEG. Default 'final'. Suppressed automatically after a password fill."),
       password_file: z
         .string()
@@ -134,7 +153,7 @@ server.registerTool(
         ),
     },
   },
-  async ({ task, start_url, ...rest }, extra) => {
+  async ({ task, start_url, ...rest }, ctx) => {
     // Credential delivery resolves before the browser launches. Every failure
     // here is a configuration error and is reported without ever quoting file
     // contents or variable values. Seed cookies follow the password's
@@ -215,7 +234,7 @@ server.registerTool(
         password,
         cookies,
       },
-      extra.signal,
+      ctx.mcpReq.signal,
     );
 
     const { screenshot_base64_jpeg, ...json } = result as Record<string, unknown>;
@@ -229,5 +248,12 @@ server.registerTool(
   },
 );
 
-await server.connect(new StdioServerTransport());
-console.error(`[jev-browser] ready — Jev model ${process.env.JEV_BROWSER_MODEL ?? "jev-latest"}`);
+if (process.argv.includes("--http") || process.env.JEV_BROWSER_TRANSPORT === "http") {
+  const { serveHttp } = await import("./http.js");
+  const { url } = await serveHttp(createServer);
+  console.error(`[jev-browser] ready — Jev model ${process.env.JEV_BROWSER_MODEL ?? "jev-latest"}, stateless HTTP at ${url}`);
+} else {
+  const { serveStdio } = await import("@modelcontextprotocol/server/stdio");
+  serveStdio(createServer);
+  console.error(`[jev-browser] ready — Jev model ${process.env.JEV_BROWSER_MODEL ?? "jev-latest"}`);
+}
