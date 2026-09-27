@@ -63,7 +63,7 @@
     "@modelcontextprotocol/node": "^2.1.0",
     "@modelcontextprotocol/server": "^2.1.0",
     "@typesafe-ai/sdk": "^0.6.0",
-    "ai": "^7.0.116",
+    "ai": "^7.0.118",
     "playwright": "^1.55.0",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2",
