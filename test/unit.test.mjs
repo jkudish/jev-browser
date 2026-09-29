@@ -1409,3 +1409,61 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
     server.close();
   }
 });
+
+test("the judged excerpt is the open dialog, else the text on screen", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const { createServer } = await import("node:http");
+  const header = Array.from({ length: 80 }, (_, i) => `<p>Navigation link ${i} and site banner text.</p>`).join("");
+  const pages = {
+    "/dialog":
+      `<!doctype html><html><head><title>Account</title></head><body>${header}` +
+      `<div role="dialog" aria-modal="true" style="position:fixed;top:10px;left:10px;background:#fff">` +
+      `<h2>Forgot your password?</h2><p>Reset email sent.</p><button>Back to login</button></div></body></html>`,
+    "/long":
+      `<!doctype html><html><head><title>Long</title></head><body><p>Top of the page.</p>` +
+      `<div style="height:4000px"></div><p>Far below the fold.</p></body></html>`,
+  };
+  const server = createServer((req, res) => {
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(pages[req.url] ?? "");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const states = [];
+  const transport = {
+    name: "fixture",
+    async ask({ state, questions }) {
+      states.push(state);
+      const answers = {};
+      for (const [id, question] of Object.entries(questions)) {
+        const keys = question.type === "noul" ? [] : Object.keys(question.criteria);
+        answers[id] =
+          question.type === "noul"
+            ? { type: "noul", noul: 0 }
+            : { type: "choice", choice: "done", confidence: 1, probabilities: Object.fromEntries(keys.map((key) => [key, key === "done" ? 1 : 0])) };
+      }
+      return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+    },
+  };
+  try {
+    const page = await browser.newPage();
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    await page.goto(`${origin}/dialog`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.equal(states[0].page_text_excerpt, "Forgot your password? Reset email sent. Back to login");
+    await page.goto(`${origin}/long`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.equal(states[1].page_text_excerpt, "Top of the page.");
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
