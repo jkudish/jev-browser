@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1
+
+- Goal judgment now reads what a person sees — the open modal dialog, else the text in the viewport — instead of the start of the body, which is often navigation or banners; redacted credential runs keep the page-start excerpt. Via [#21](https://github.com/jkudish/jev-browser/pull/21).
+- Dependency updates: `ai` 7.0.122, @ai-sdk provider patches, `@modelcontextprotocol/server` + `node` 2.2.0.
+
 ## 0.8.0
 
 - Opt-in stateless Streamable HTTP: `jev-browser --http` (or `JEV_BROWSER_TRANSPORT=http`) serves MCP 2026-07-28 per request and 2025-era clients through the SDK's stateless fallback, with no sessions, on `PORT` (default 8080) at `/mcp`, with `/health`. `HOST` defaults to loopback; binding beyond it is explicit. `JEV_BROWSER_AUTH_TOKEN` gates it with a bearer token and is required unless `HOST` is loopback; Host/Origin rebinding guards answer fixed-string 403s. Concurrent requests are capped at `JEV_BROWSER_MAX_CONCURRENCY` (default 4, since each in-flight call holds a headless Chromium) with `429` backpressure, and a client that disconnects mid call aborts its navigation and frees the slot. The tool list is static: no `listChanged` is advertised and `subscriptions/listen` is refused, so an idle listener cannot occupy a slot. `jev_navigate`'s `max_chars` is capped at 1,000,000. Stdio stays the default.
