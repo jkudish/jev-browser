@@ -401,19 +401,27 @@ async function pageObservables(page: Page, bounded: (cap: number) => number, exc
       length: document.body?.innerText?.length ?? 0,
       scrollY: window.scrollY,
       excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, cap),
-      // What a person sees, for the judgment: the topmost open modal dialog,
-      // else the text inside the viewport. The start of body text is often
-      // navigation or banners, and never an open dialog.
+      // What a person sees, for the judgment: the innermost open modal dialog
+      // in document order, else the text inside the viewport. The start of
+      // body text is often navigation or banners, and never an open dialog.
+      // Credential runs keep the page-start `excerpt` instead (wired at the
+      // call site): trimming and joining text nodes can split a rendered
+      // secret across a space, and the redactor matches whole secrets.
       visibleExcerpt: (() => {
         const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
         const shown = (el: Element) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
-        const modal = [...document.querySelectorAll<HTMLElement>('[aria-modal="true"], dialog[open]')].filter(shown).at(-1);
+        const modal = [...document.querySelectorAll<HTMLElement>('[aria-modal="true"], dialog:modal')].filter(shown).at(-1);
         if (modal) return clean(modal.innerText).slice(0, cap);
         const parts: string[] = [];
         let length = 0;
+        let visited = 0;
         const walker = document.createTreeWalker(document.body ?? document.documentElement, NodeFilter.SHOW_TEXT);
         const range = document.createRange();
-        for (let node = walker.nextNode(); node && length < cap; node = walker.nextNode()) {
+        // Bound the work: a page that is mostly hidden (modal backdrops,
+        // collapsed sections) yields few visible nodes, and without a cap the
+        // walk would measure every text node in the document each step.
+        for (let node = walker.nextNode(); node && length < cap && visited < 5_000; node = walker.nextNode()) {
+          visited++;
           const text = clean(node.textContent);
           if (!text || !node.parentElement || !shown(node.parentElement)) continue;
           range.selectNodeContents(node);
@@ -422,7 +430,9 @@ async function pageObservables(page: Page, bounded: (cap: number) => number, exc
           parts.push(text);
           length += text.length + 1;
         }
-        return (parts.length ? parts.join(" ") : clean(document.body?.innerText)).slice(0, cap);
+        // No visible text means no visible evidence — an honest empty excerpt,
+        // never the unseen start of the body that this feature exists to stop.
+        return parts.join(" ").slice(0, cap);
       })(),
     }), excerptCap)
     .catch(() => ({ length: 0, scrollY: 0, excerpt: "", visibleExcerpt: "" }));
@@ -791,7 +801,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         task: safeTask,
         current_page: { url: R(observables.url), title: R(observables.title) },
         page_text_excerpt: redactor
-          ? redactor.redactCapped(observables.visibleExcerpt, STATE_EXCERPT_CHARS)
+          ? redactor.redactCapped(observables.excerpt, STATE_EXCERPT_CHARS)
           : observables.visibleExcerpt.slice(0, STATE_EXCERPT_CHARS),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
         element_list_truncated: truncated,
