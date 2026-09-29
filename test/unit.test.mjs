@@ -1409,3 +1409,176 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
     server.close();
   }
 });
+
+test("the judged excerpt is the open dialog, else the text on screen", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const { createServer } = await import("node:http");
+  const header = Array.from({ length: 80 }, (_, i) => `<p>Navigation link ${i} and site banner text.</p>`).join("");
+  const pages = {
+    "/dialog":
+      `<!doctype html><html><head><title>Account</title></head><body>${header}` +
+      `<div role="dialog" aria-modal="true" style="position:fixed;top:10px;left:10px;background:#fff">` +
+      `<h2>Forgot your password?</h2><p>Reset email sent.</p><button>Back to login</button></div></body></html>`,
+    "/long":
+      `<!doctype html><html><head><title>Long</title></head><body><p>Top of the page.</p>` +
+      `<div style="height:4000px"></div><p>Far below the fold.</p></body></html>`,
+  };
+  const server = createServer((req, res) => {
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(pages[req.url] ?? "");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const states = [];
+  const transport = {
+    name: "fixture",
+    async ask({ state, questions }) {
+      states.push(state);
+      const answers = {};
+      for (const [id, question] of Object.entries(questions)) {
+        const keys = question.type === "noul" ? [] : Object.keys(question.criteria);
+        answers[id] =
+          question.type === "noul"
+            ? { type: "noul", noul: 0 }
+            : { type: "choice", choice: "done", confidence: 1, probabilities: Object.fromEntries(keys.map((key) => [key, key === "done" ? 1 : 0])) };
+      }
+      return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+    },
+  };
+  try {
+    const page = await browser.newPage();
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    await page.goto(`${origin}/dialog`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.equal(states[0].page_text_excerpt, "Forgot your password? Reset email sent. Back to login");
+    await page.goto(`${origin}/long`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.equal(states[1].page_text_excerpt, "Top of the page.");
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test("credential runs judge the page-start excerpt so split-span secrets stay redactable", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  // The secret renders as two adjacent inline spans: contiguous in
+  // innerText, split across a space by any per-node trimming collector.
+  await page.setContent(
+    "<title>Session</title><main><p>Session token: <span>tok-</span><span>abc123</span> active.</p></main>",
+  );
+  const states = [];
+  const transport = {
+    name: "fixture",
+    async ask({ state, questions }) {
+      states.push(state);
+      const answers = {};
+      for (const [id, question] of Object.entries(questions)) {
+        const keys = question.type === "noul" ? [] : Object.keys(question.criteria);
+        answers[id] =
+          question.type === "noul"
+            ? { type: "noul", noul: 0 }
+            : { type: "choice", choice: "done", confidence: 1, probabilities: Object.fromEntries(keys.map((key) => [key, key === "done" ? 1 : 0])) };
+      }
+      return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+    },
+  };
+  try {
+    await navigate({
+      task: "Read the session token status",
+      page,
+      transport,
+      maxSteps: 1,
+      screenshot: "none",
+      password: { value: "tok-abc123", origin: "https://example.com" },
+    });
+    assert.ok(states.length >= 1, "at least one Jev call must happen");
+    const excerpt = states[0].page_text_excerpt;
+    assert.ok(!excerpt.includes("tok-abc123"), "the whole secret must never reach Jev");
+    assert.ok(!excerpt.includes("tok- abc123"), "a space-split echo of the secret must never reach Jev");
+    assert.ok(excerpt.length > 0, "the page-start excerpt is still judged on credential runs");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("only modal dialogs hijack the excerpt; a plain open dialog and an empty viewport do not", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const { createServer } = await import("node:http");
+  const pages = {
+    "/nonmodal":
+      `<!doctype html><html><head><title>Tools</title></head><body><p>Visible page content.</p>` +
+      `<dialog id="d"><p>Non-modal helper text.</p></dialog><script>document.getElementById("d").show()</script></body></html>`,
+    "/modal":
+      `<!doctype html><html><head><title>Tools</title></head><body><p>Visible page content.</p>` +
+      `<dialog id="d"><p>Modal helper text.</p></dialog><script>document.getElementById("d").showModal()</script></body></html>`,
+    "/empty": `<!doctype html><html><head><title>Empty</title></head><body><div style="height:4000px"></div><p>Far below the fold.</p></body></html>`,
+  };
+  const server = createServer((req, res) => {
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(pages[req.url] ?? "");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const states = [];
+  const transport = {
+    name: "fixture",
+    async ask({ state, questions }) {
+      states.push(state);
+      const answers = {};
+      for (const [id, question] of Object.entries(questions)) {
+        const keys = question.type === "noul" ? [] : Object.keys(question.criteria);
+        answers[id] =
+          question.type === "noul"
+            ? { type: "noul", noul: 0 }
+            : { type: "choice", choice: "done", confidence: 1, probabilities: Object.fromEntries(keys.map((key) => [key, key === "done" ? 1 : 0])) };
+      }
+      return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+    },
+  };
+  try {
+    const page = await browser.newPage();
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    await page.goto(`${origin}/nonmodal`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.ok(states[0].page_text_excerpt.includes("Visible page content."), "a show() dialog must not hijack the excerpt");
+    // The non-modal dialog renders in the viewport, so its text may appear
+    // alongside the page text — but it must never replace it.
+    await page.goto(`${origin}/modal`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.ok(states[1].page_text_excerpt.includes("Modal helper text."), "a showModal() dialog is the excerpt");
+    await page.goto(`${origin}/empty`);
+    await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
+    assert.equal(states[2].page_text_excerpt, "", "no visible text means an honest empty excerpt, not the unseen body start");
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});

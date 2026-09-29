@@ -390,6 +390,7 @@ interface Observables {
   textLength: number;
   scrollY: number;
   excerpt: string;
+  visibleExcerpt: string;
 }
 
 async function pageObservables(page: Page, bounded: (cap: number) => number, excerptCap = 1500): Promise<Observables> {
@@ -400,9 +401,42 @@ async function pageObservables(page: Page, bounded: (cap: number) => number, exc
       length: document.body?.innerText?.length ?? 0,
       scrollY: window.scrollY,
       excerpt: (document.body?.innerText ?? "").replace(/\s+/g, " ").slice(0, cap),
+      // What a person sees, for the judgment: the innermost open modal dialog
+      // in document order, else the text inside the viewport. The start of
+      // body text is often navigation or banners, and never an open dialog.
+      // Credential runs keep the page-start `excerpt` instead (wired at the
+      // call site): trimming and joining text nodes can split a rendered
+      // secret across a space, and the redactor matches whole secrets.
+      visibleExcerpt: (() => {
+        const clean = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+        const shown = (el: Element) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden";
+        const modal = [...document.querySelectorAll<HTMLElement>('[aria-modal="true"], dialog:modal')].filter(shown).at(-1);
+        if (modal) return clean(modal.innerText).slice(0, cap);
+        const parts: string[] = [];
+        let length = 0;
+        let visited = 0;
+        const walker = document.createTreeWalker(document.body ?? document.documentElement, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        // Bound the work: a page that is mostly hidden (modal backdrops,
+        // collapsed sections) yields few visible nodes, and without a cap the
+        // walk would measure every text node in the document each step.
+        for (let node = walker.nextNode(); node && length < cap && visited < 5_000; node = walker.nextNode()) {
+          visited++;
+          const text = clean(node.textContent);
+          if (!text || !node.parentElement || !shown(node.parentElement)) continue;
+          range.selectNodeContents(node);
+          const r = range.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0 || r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue;
+          parts.push(text);
+          length += text.length + 1;
+        }
+        // No visible text means no visible evidence — an honest empty excerpt,
+        // never the unseen start of the body that this feature exists to stop.
+        return parts.join(" ").slice(0, cap);
+      })(),
     }), excerptCap)
-    .catch(() => ({ length: 0, scrollY: 0, excerpt: "" }));
-  return { url, title, textLength: data.length, scrollY: data.scrollY, excerpt: data.excerpt };
+    .catch(() => ({ length: 0, scrollY: 0, excerpt: "", visibleExcerpt: "" }));
+  return { url, title, textLength: data.length, scrollY: data.scrollY, excerpt: data.excerpt, visibleExcerpt: data.visibleExcerpt };
 }
 
 async function settle(page: Page, bounded: (cap: number) => number) {
@@ -768,7 +802,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         current_page: { url: R(observables.url), title: R(observables.title) },
         page_text_excerpt: redactor
           ? redactor.redactCapped(observables.excerpt, STATE_EXCERPT_CHARS)
-          : observables.excerpt.slice(0, STATE_EXCERPT_CHARS),
+          : observables.visibleExcerpt.slice(0, STATE_EXCERPT_CHARS),
         interactive_elements: elements.map((e) => ({ id: e.id, description: e.description })),
         element_list_truncated: truncated,
         no_interactive_elements: elements.length === 0,
