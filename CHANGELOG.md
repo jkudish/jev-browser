@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.3
+
+- Updated AI SDK typing dependencies.
+
 ## 0.8.2
 
 - TypeSafe requests now retry transient HTTP failures and report the effective model through jev-agent-tools 0.1.4. Updated typing-provider dependencies.
