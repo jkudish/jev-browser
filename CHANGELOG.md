@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- TypeSafe requests now retry transient HTTP failures and report the effective model through jev-agent-tools 0.1.4. Updated typing-provider dependencies.
+
 ## 0.8.1
 
 - Goal judgment now reads what a person sees — the open modal dialog, else the text in the viewport — instead of the start of the body, which is often navigation or banners; redacted credential runs keep the page-start excerpt. Via [#21](https://github.com/jkudish/jev-browser/pull/21).
