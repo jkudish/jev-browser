@@ -25,6 +25,23 @@ function choiceConfidence(answers: Record<string, JevAnswer>): number | null {
   return 1;
 }
 
+// ponytail: process-level strike memory, reset on restart
+const strikes = new Map<string, number>();
+const STRIKE_LIMIT = 2;
+const GARBAGE_CONFIDENCE = 0.1;
+
+function recordResult(model: string, ok: boolean, confidence: number | null) {
+  if (!ok || (confidence !== null && confidence < GARBAGE_CONFIDENCE)) {
+    strikes.set(model, (strikes.get(model) ?? 0) + 1);
+  } else {
+    strikes.delete(model);
+  }
+}
+
+function shouldSkip(model: string): boolean {
+  return (strikes.get(model) ?? 0) >= STRIKE_LIMIT;
+}
+
 export async function askLadder(
   transport: JevTransport,
   state: unknown,
@@ -41,11 +58,16 @@ export async function askLadder(
   let lastError = "no decision model answered";
 
   for (const model of modelLadder(env)) {
+    if (shouldSkip(model)) {
+      tried.push({ model, confidence: null, error: "skipped (circuit breaker)" });
+      continue;
+    }
     if (signal.aborted) throw signal.reason;
     const result = await ask({ state, questions, model, signal }, { transport });
     if (!result.ok) {
       if (signal.aborted) throw signal.reason;
       if (!shouldFallthrough(result.code, result.message)) throw new Error(result.message);
+      recordResult(model, false, null);
       tried.push({ model, confidence: null, error: result.code });
       lastError = result.message;
       continue;
@@ -54,6 +76,7 @@ export async function askLadder(
     input_tokens += result.usage.input_tokens;
     output_tokens += result.usage.output_tokens;
     const confidence = choiceConfidence(result.answer);
+    recordResult(model, true, confidence);
     tried.push({ model, confidence });
     const score = confidence ?? 0;
     if (!best || score > best.confidence) best = { answers: result.answer, model: result.model, confidence: score };

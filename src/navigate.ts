@@ -1079,19 +1079,22 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       const after = await pageObservables(page, bounded, excerptCap);
       // Execution failures are attributed to the action, not to ambient page
       // changes that happened to occur in the same window.
-      const pageUnchanged =
+      let pageUnchanged =
         !actionError &&
         after.url === observables.url &&
         after.title === observables.title &&
+        after.visibleExcerpt === observables.visibleExcerpt &&
         Math.abs(after.textLength - observables.textLength) <= 50 &&
         Math.abs(after.scrollY - observables.scrollY) <= 40;
-      const outcome = actionError
+      let outcome = actionError
         ? "action failed"
         : after.url !== observables.url
           ? `navigated to ${R(after.url)}`
           : after.title !== observables.title
             ? `page changed: "${R(after.title)}"`
-            : Math.abs(after.textLength - observables.textLength) > 50
+            : after.visibleExcerpt !== observables.visibleExcerpt
+              ? "page content changed"
+              : Math.abs(after.textLength - observables.textLength) > 50
               ? "page content changed"
               : Math.abs(after.scrollY - observables.scrollY) > 40
                 ? "scrolled"
@@ -1101,6 +1104,45 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
                     // misreads a successful type as a no-op.
                     `typed into "${typedIntoLabel}"; no visible page change`
                   : "no visible change";
+
+      // If the top pick failed or did nothing, try the next-best from the same
+      // distribution before giving up. Click-only retry: the common failure is
+      // picking a lookalike control (e.g. filter vs sort menu item).
+      if (actionError || pageUnchanged) {
+        const alt = pickAlternate(probabilities, new Set([chosen, "done"]));
+        const altElement = alt
+          ? elements.find((e) => alt === `click_${e.id}`)
+          : undefined;
+        if (altElement) {
+          try {
+            const primary = selectorFor(altElement);
+            await page.click(primary, { timeout: bounded(4_000) }).catch(async () => {
+              const fb = fallbackSelectorFor(altElement);
+              if (!fb || fb === primary) throw new Error(`element ${altElement.attr} not found by stamp or fallback`);
+              await page.click(fb, { timeout: bounded(4_000) });
+            });
+            await settle(page, bounded);
+            const altAfter = await pageObservables(page, bounded, excerptCap);
+            const altChanged =
+              altAfter.url !== after.url ||
+              altAfter.title !== after.title ||
+              altAfter.visibleExcerpt !== after.visibleExcerpt ||
+              Math.abs(altAfter.textLength - after.textLength) > 50;
+            if (altChanged) {
+              chosen = alt!;
+              detail = `${altElement.description} (retry: first pick had no effect)`;
+              recoveryReason = "first pick had no effect; retried with next-best option";
+              actionError = undefined;
+              pageUnchanged = false;
+              outcome = altAfter.url !== after.url
+                ? `navigated to ${R(altAfter.url)}`
+                : "page content changed";
+            }
+          } catch {
+            // retry also failed; keep the original outcome
+          }
+        }
+      }
       lastRedundant = pageUnchanged ? (typedIntoLabel !== null ? "typed" : "no_change") : null;
 
       lastExecuted = chosen;
