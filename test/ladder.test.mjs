@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { confidentEnough, openrouterSlug, shouldFallthrough, modelLadder } from "../dist/ladder.js";
+import { confidentEnough, openrouterSlug, shouldFallthrough, modelLadder, strikeLimit, garbageConfidence, excerptChars, pricePerMtokIn, browserViewport } from "../dist/ladder.js";
 
 test("slash ids are not prefixed", () => {
   assert.equal(openrouterSlug("inception/mercury-decide:free"), "inception/mercury-decide:free");
@@ -26,4 +26,18 @@ test("default ladder starts with the free model", () => {
   assert.equal(modelLadder({}).length, 7);
   assert.equal(modelLadder({})[0], "inception/mercury-decide:free");
   assert.deepEqual(modelLadder({ JEV_BROWSER_MODELS: "a/b, c/d" }), ["a/b", "c/d"]);
+});
+
+test("env overrides with sane defaults", () => {
+  assert.equal(strikeLimit({}), 2);
+  assert.equal(strikeLimit({ JEV_BROWSER_STRIKE_LIMIT: "5" }), 5);
+  assert.equal(garbageConfidence({}), 0.1);
+  assert.equal(garbageConfidence({ JEV_BROWSER_GARBAGE_CONFIDENCE: "0.05" }), 0.05);
+  assert.equal(excerptChars({}), 1500);
+  assert.equal(excerptChars({ JEV_BROWSER_EXCERPT_CHARS: "800" }), 800);
+  assert.equal(pricePerMtokIn({}), 0.042);
+  assert.equal(pricePerMtokIn({ JEV_BROWSER_PRICE_PER_MTOK_IN: "0" }), 0);
+  assert.deepEqual(browserViewport({}), { width: 1024, height: 640 });
+  assert.deepEqual(browserViewport({ JEV_BROWSER_VIEWPORT: "1600x1400" }), { width: 1600, height: 1400 });
+  assert.deepEqual(browserViewport({ JEV_BROWSER_VIEWPORT: "bogus" }), { width: 1024, height: 640 });
 });

@@ -23,6 +23,33 @@ export function confidenceFloor(env: Record<string, string | undefined> = proces
   return Number.isFinite(n) ? n : 0.7;
 }
 
+export function strikeLimit(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.JEV_BROWSER_STRIKE_LIMIT);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2;
+}
+
+export function garbageConfidence(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.JEV_BROWSER_GARBAGE_CONFIDENCE);
+  return Number.isFinite(n) ? n : 0.1;
+}
+
+export function excerptChars(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.JEV_BROWSER_EXCERPT_CHARS);
+  return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 1_500;
+}
+
+export function pricePerMtokIn(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.JEV_BROWSER_PRICE_PER_MTOK_IN);
+  return Number.isFinite(n) && n >= 0 ? n : 0.042;
+}
+
+export function browserViewport(env: Record<string, string | undefined> = process.env): { width: number; height: number } {
+  const raw = env.JEV_BROWSER_VIEWPORT;
+  const m = raw?.match(/^(\d{2,5})x(\d{2,5})$/);
+  if (m) return { width: Number(m[1]), height: Number(m[2]) };
+  return { width: 1024, height: 640 };
+}
+
 export function openrouterSlug(model: string): string {
   if (model.includes("/")) return model;
   if (model === "jev-latest") return "typesafe/jev-1.13";

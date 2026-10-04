@@ -18,7 +18,6 @@ import {
   detectBotProtection,
   heuristicQuery,
   pickAlternate,
-  PRICE_PER_MTOK_IN,
   RawElement,
   resolveCookies,
   resolveTypingSelection,
@@ -36,11 +35,11 @@ import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecr
 import { InvalidJevAnswer, type JevTransport, type JevAnswer } from "./provider.js";
 import { fallbackSelectorFor } from "./lib.js";
 import { askLadder, type LadderHit } from "./ladder-ask.js";
-import { confidenceFloor } from "./ladder.js";
+import { confidenceFloor, excerptChars, pricePerMtokIn, browserViewport } from "./ladder.js";
 import { openrouterDecisions } from "./openrouter-decisions.js";
 
 const MAX_CONSOLE_EVENTS = 200;
-const STATE_EXCERPT_CHARS = 1_500;
+const STATE_EXCERPT_CHARS = excerptChars();
 // Display limits on credential runs: what model-facing strings may show.
 // Capture windows are these plus the longest secret representation.
 const CREDENTIAL_VISIBLE = { label: 80, option: 120, href: 120 };
@@ -135,7 +134,7 @@ async function askJev(budget: RunBudget, state: unknown, questions: Record<strin
   budget.usage.jev_calls += hit.calls;
   budget.usage.input_tokens += hit.input_tokens;
   budget.usage.output_tokens += hit.output_tokens;
-  budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * PRICE_PER_MTOK_IN;
+  budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * pricePerMtokIn();
   return hit;
 }
 
@@ -671,7 +670,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     const context: BrowserContext = options.page
       ? options.page.context()
       : await browser!.newContext({
-          viewport: { width: 1024, height: 640 },
+          viewport: browserViewport(),
           ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
         });
     observedContext = context;

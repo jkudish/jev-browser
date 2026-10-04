@@ -1,5 +1,5 @@
 import { ask, type JevAnswer, type JevTransport } from "@jkudish/jev-agent-tools";
-import { confidentEnough, confidenceFloor, modelLadder, shouldFallthrough } from "./ladder.js";
+import { confidentEnough, confidenceFloor, modelLadder, shouldFallthrough, strikeLimit, garbageConfidence } from "./ladder.js";
 
 export interface TriedModel {
   model: string;
@@ -27,11 +27,8 @@ function choiceConfidence(answers: Record<string, JevAnswer>): number | null {
 
 // ponytail: process-level strike memory, reset on restart
 const strikes = new Map<string, number>();
-const STRIKE_LIMIT = 2;
-const GARBAGE_CONFIDENCE = 0.1;
-
 function recordResult(model: string, ok: boolean, confidence: number | null) {
-  if (!ok || (confidence !== null && confidence < GARBAGE_CONFIDENCE)) {
+  if (!ok || (confidence !== null && confidence < garbageConfidence())) {
     strikes.set(model, (strikes.get(model) ?? 0) + 1);
   } else {
     strikes.delete(model);
@@ -39,7 +36,7 @@ function recordResult(model: string, ok: boolean, confidence: number | null) {
 }
 
 function shouldSkip(model: string): boolean {
-  return (strikes.get(model) ?? 0) >= STRIKE_LIMIT;
+  return (strikes.get(model) ?? 0) >= strikeLimit();
 }
 
 export async function askLadder(
