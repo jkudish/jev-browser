@@ -116,6 +116,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
     const id = `e${elements.length + 1}`;
     const label = el.text.slice(0, 60);
     const hrefTail = el.href ? ` -> ${el.href.replace(/^https?:\/\//, "").slice(0, 70)}` : "";
+    const typeLabel = el.role || el.tag;
     elements.push({
       id,
       attr: el.attr,
@@ -124,14 +125,14 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
       submitVia: kind === "submit" ? "click" : undefined,
       description:
         kind === "search"
-          ? `${el.tag} "${label}" (type into this search box and run the search)`
+          ? `${typeLabel} "${label}" (type into this search box and run the search)`
           : kind === "submit"
-            ? `${el.tag} "${label}" (submit the form now)`
+            ? `${typeLabel} "${label}" (submit the form now)`
             : kind === "type"
-              ? `${el.tag} "${label}" (type without submitting)`
+              ? `${typeLabel} "${label}" (type without submitting)`
               : kind === "select"
-                ? `${el.tag} "${label}" (dropdown; a follow-up picks the option)`
-                : `${el.tag} "${label}"${hrefTail}`,
+                ? `${typeLabel} "${label}" (dropdown; a follow-up picks the option)`
+                : `${typeLabel} "${label}"${hrefTail}`,
       options: kind === "select" ? (el.options ?? []) : undefined,
     });
     // Non-search single-line text fields additionally offer submit (press
