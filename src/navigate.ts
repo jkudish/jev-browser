@@ -34,7 +34,7 @@ import { selectOptionQuestion, stepQuestions } from "./questions.js";
 import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
 import { InvalidJevAnswer, type JevTransport, type JevAnswer } from "./provider.js";
 import { fallbackSelectorFor } from "./lib.js";
-import { askLadder, type LadderHit } from "./ladder-ask.js";
+import { askLadder, confirmStuck, type LadderHit } from "./ladder-ask.js";
 import { confidenceFloor, excerptChars, pricePerMtokIn, browserViewport } from "./ladder.js";
 import { openrouterDecisions } from "./openrouter-decisions.js";
 
@@ -877,9 +877,17 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         break;
       }
       if ((answers.stuck as Extract<JevAnswer, { type: "noul" }>).noul > 0.85 && step > 2) {
-        steps.push({ ...base, executed_action: null, detail: "stuck watcher fired; proposed action not executed", outcome: "stuck watcher fired before acting" });
-        status = "stuck";
-        break;
+        const firstStuck = (answers.stuck as Extract<JevAnswer, { type: "noul" }>).noul;
+        const confirmed = await confirmStuck(
+          budget.transport, state, stepQuestions(buildCriteria(elements)),
+          budget.signal, budget.model ?? "", firstStuck,
+        ).catch(() => false);
+        if (confirmed) {
+          steps.push({ ...base, executed_action: null, detail: "stuck watcher fired (3+ models agree); proposed action not executed", outcome: "stuck watcher fired before acting" });
+          status = "stuck";
+          break;
+        }
+        // not enough models agree — treat as noise, continue
       }
 
       // Repeat-no-op recovery: switch to the next-best option from the

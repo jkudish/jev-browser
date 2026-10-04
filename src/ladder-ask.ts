@@ -1,5 +1,5 @@
 import { ask, type JevAnswer, type JevTransport } from "@jkudish/jev-agent-tools";
-import { confidentEnough, confidenceFloor, modelLadder, shouldFallthrough, strikeLimit, garbageConfidence } from "./ladder.js";
+import { confidentEnough, confidenceFloor, modelLadder, shouldFallthrough, strikeLimit, garbageConfidence, stuckConfirm } from "./ladder.js";
 
 export interface TriedModel {
   model: string;
@@ -37,6 +37,32 @@ function recordResult(model: string, ok: boolean, confidence: number | null) {
 
 function shouldSkip(model: string): boolean {
   return (strikes.get(model) ?? 0) >= strikeLimit();
+}
+
+export async function confirmStuck(
+  transport: JevTransport,
+  state: unknown,
+  questions: Record<string, unknown>,
+  signal: AbortSignal,
+  firstModel: string,
+  firstStuck: number,
+): Promise<boolean> {
+  const need = stuckConfirm();
+  if (firstStuck <= 0.85) return false;
+  let agree = 1; // first model already said stuck
+  for (const model of modelLadder()) {
+    if (agree > need) break;
+    if (model === firstModel || shouldSkip(model)) continue;
+    try {
+      const result = await ask({ state, questions, model, signal }, { transport });
+      if (!result.ok) continue;
+      const stuck = (result.answer.stuck as Extract<JevAnswer, { type: "noul" }>)?.noul ?? 0;
+      if (stuck > 0.85) agree++;
+    } catch {
+      continue;
+    }
+  }
+  return agree > need;
 }
 
 export async function askLadder(

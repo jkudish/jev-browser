@@ -50,6 +50,11 @@ export function browserViewport(env: Record<string, string | undefined> = proces
   return { width: 1024, height: 640 };
 }
 
+export function stuckConfirm(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.JEV_BROWSER_STUCK_CONFIRM);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2;
+}
+
 export function openrouterSlug(model: string): string {
   if (model.includes("/")) return model;
   if (model === "jev-latest") return "typesafe/jev-1.13";
