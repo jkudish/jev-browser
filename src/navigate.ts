@@ -278,7 +278,7 @@ async function extractAndStamp(
       // selectors match more than one element.
       document.querySelectorAll("[data-jev-id]").forEach((el) => el.removeAttribute("data-jev-id"));
       const SEL =
-        'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="searchbox"], [role="textbox"]';
+        'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="searchbox"], [role="textbox"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="tab"], [role="switch"], [role="radio"]';
       const out: any[] = [];
       for (const el of document.querySelectorAll(SEL) as NodeListOf<HTMLElement>) {
         // Cap accepted candidates AFTER filtering so hidden boilerplate at the
@@ -347,7 +347,7 @@ async function extractAndStamp(
         const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap.href) : "";
         const clickable =
           ["a", "button"].includes(tag) ||
-          ["button", "link"].includes(roleAttr) ||
+          ["button", "link", "menuitem", "menuitemradio", "menuitemcheckbox", "option", "tab", "switch", "radio"].includes(roleAttr) ||
           ["submit", "button", "checkbox", "radio"].includes(typeAttr);
 
         const selectable = tag === "select";
