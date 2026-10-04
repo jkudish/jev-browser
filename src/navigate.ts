@@ -33,7 +33,10 @@ import {
 } from "./lib.js";
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
 import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
-import { askJev as askProvider, InvalidJevAnswer, resolveTransport, type JevTransport, type JevAnswer } from "./provider.js";
+import { InvalidJevAnswer, type JevTransport, type JevAnswer } from "./provider.js";
+import { askLadder, type LadderHit } from "./ladder-ask.js";
+import { confidenceFloor } from "./ladder.js";
+import { openrouterDecisions } from "./openrouter-decisions.js";
 
 const MAX_CONSOLE_EVENTS = 200;
 const STATE_EXCERPT_CHARS = 1_500;
@@ -124,15 +127,15 @@ interface RunBudget {
   provider: string | null;
 }
 
-async function askJev(budget: RunBudget, state: unknown, questions: Record<string, unknown>) {
-  const result = await askProvider(budget.transport, { state, questions, model: budget.requestedModel, signal: budget.signal });
-  budget.provider = result.provider;
-  budget.model = result.model;
-  budget.usage.jev_calls += 1;
-  budget.usage.input_tokens += result.usage.input_tokens;
-  budget.usage.output_tokens += result.usage.output_tokens;
+async function askJev(budget: RunBudget, state: unknown, questions: Record<string, unknown>): Promise<LadderHit> {
+  const hit = await askLadder(budget.transport, state, questions, budget.signal);
+  budget.provider = budget.transport.name;
+  if (hit.model) budget.model = hit.model;
+  budget.usage.jev_calls += hit.calls;
+  budget.usage.input_tokens += hit.input_tokens;
+  budget.usage.output_tokens += hit.output_tokens;
   budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * PRICE_PER_MTOK_IN;
-  return result.answers;
+  return hit;
 }
 
 // ── Typing generator: provider-agnostic via the Vercel AI SDK ────────────────
@@ -544,7 +547,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // another provider. Runs with typing disabled ignore typing config at all,
   // so a broken config can always be worked around with allowTyping: false.
   const typingGenerator = allowTyping ? createTypingGenerator() : null;
-  const transport = options.transport ?? resolveTransport();
+  const transport = options.transport ?? openrouterDecisions();
 
   // One abort source per run: the wall-clock deadline, optionally composed
   // with caller cancellation (the MCP layer forwards its signal).
@@ -626,6 +629,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   let onNewPage: ((page: Page) => void) | null = null;
   const observerCleanups: Array<() => void> = [];
   let status = "error";
+  let hostRequest: Record<string, unknown> | undefined;
 
   const recordEvent = (event: Omit<ConsoleEvent, "step">) => {
     if (consoleEvents.length >= MAX_CONSOLE_EVENTS) {
@@ -808,7 +812,45 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         no_interactive_elements: elements.length === 0,
         history,
       };
-      const answers = await askJev(budget, state, stepQuestions(buildCriteria(elements)));
+      const hit = await askJev(budget, state, stepQuestions(buildCriteria(elements)));
+      if (!hit.confident || !hit.answers) {
+        const answers = hit.answers;
+        const actionAnswer = answers?.action as Extract<JevAnswer, { type: "choice" }> | undefined;
+        const probabilities: Record<string, number> = actionAnswer?.probabilities ?? {};
+        const proposed = actionAnswer?.choice ?? "";
+        const alternatives = Object.entries(probabilities)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 6)
+          .map(([id, p]) => ({
+            id,
+            label: elements.find((e) => id === `${e.kind}_${e.id}`)?.description ?? id,
+            p,
+          }));
+        hostRequest = {
+          reason: "all_models_below_floor",
+          floor: confidenceFloor(),
+          tried: hit.tried,
+          proposed_action: proposed,
+          proposed_label: elements.find((e) => proposed === `${e.kind}_${e.id}`)?.description ?? proposed,
+          confidence: hit.confidence,
+          alternatives,
+        };
+        steps.push({
+          step,
+          t_ms: Math.round(performance.now() - started),
+          proposed_action: proposed,
+          executed_action: null,
+          detail: "every model below confidence floor; handed to host",
+          outcome: "needs_host",
+          confidence: hit.confidence,
+          top_probability: probabilities[proposed] ?? null,
+          goal_done: answers ? (answers.goal_done as Extract<JevAnswer, { type: "noul" }>).noul : 0,
+          stuck: answers ? (answers.stuck as Extract<JevAnswer, { type: "noul" }>).noul : 0,
+        });
+        status = "needs_host";
+        break;
+      }
+      const answers = hit.answers;
       const actionAnswer = answers.action as Extract<JevAnswer, { type: "choice" }>;
       const proposed: string = actionAnswer.choice;
       const probabilities: Record<string, number> = actionAnswer.probabilities ?? {};
@@ -950,7 +992,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             // Labels are scrubbed and display-capped, so the model picks by
             // label but selection happens by live DOM index: a scrubbed or
             // truncated label can never become the selection key.
-            const optionAnswer = await askJev(
+            const optionHit = await askJev(
               budget,
               { task: safeTask, page: { url: R(observables.url), title: R(observables.title) }, dropdown: element.description, options: opts.map((o) => o.label) },
               { option: selectOptionQuestion(element.description, opts.map((o) => o.label)) },
@@ -959,6 +1001,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
               if (error instanceof InvalidJevAnswer) throw error;
               throw new InvalidJevAnswer(`Jev provider ${budget.transport.name} question option: request failed`);
             });
+            if (!optionHit.confident || !optionHit.answers) {
+              throw new InvalidJevAnswer("every model below confidence floor for select");
+            }
+            const optionAnswer = optionHit.answers;
             const pickedIndex = Number((optionAnswer.option as Extract<JevAnswer, { type: "choice" }>).choice.slice(1));
             const opt = opts[pickedIndex];
             await page.selectOption(selectorFor(element), { index: opt.i }, { timeout: bounded(4_000) });
@@ -1147,6 +1193,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       typing_model: typingGenerator?.modelId ?? null,
       password_filled: passwordFilled || undefined,
       bot_protection: publicBotProtection,
+      host_request: hostRequest,
       screenshot_suppressed: screenshotSuppressed,
       screenshot_base64_jpeg: screenshotBase64,
     };
