@@ -1,7 +1,6 @@
 // OpenRouter decision models, cheapest first. A slash means the id is already
 // a provider/model slug and must not be prefixed with typesafe/.
 export const DEFAULT_LADDER = [
-  "inception/mercury-decide:free",
   "perplexity/pplx-decider-v1-27b",
   "liquid/d1",
   "typesafe/jev-1.13",

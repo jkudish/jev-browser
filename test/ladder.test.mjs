@@ -22,9 +22,9 @@ test("confidence floor accepts only a high enough number", () => {
   assert.equal(confidentEnough(0.7, 0.7), true);
 });
 
-test("default ladder starts with the free model", () => {
-  assert.equal(modelLadder({}).length, 7);
-  assert.equal(modelLadder({})[0], "inception/mercury-decide:free");
+test("default ladder starts with perplexity", () => {
+  assert.equal(modelLadder({}).length, 6);
+  assert.equal(modelLadder({})[0], "perplexity/pplx-decider-v1-27b");
   assert.deepEqual(modelLadder({ JEV_BROWSER_MODELS: "a/b, c/d" }), ["a/b", "c/d"]);
 });
 
