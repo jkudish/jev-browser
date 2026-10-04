@@ -31,6 +31,7 @@ export interface SelectOption {
 export interface PageElement {
   id: string; // e1, e2, ...
   attr: string;
+  tag: string;
   kind: "click" | "type" | "select" | "submit" | "search" | "fill_password";
   description: string;
   submitVia?: "click" | "enter"; // for kind === "submit": click the control, or press Enter on the field
@@ -81,6 +82,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
       elements.push({
         id: `e${elements.length + 1}`,
         attr: el.attr,
+        tag: el.tag,
         kind: "fill_password",
         description: `input "${label || "password"}" (fill with the configured password; it is never typed by a model)`,
       });
@@ -117,6 +119,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
     elements.push({
       id,
       attr: el.attr,
+      tag: el.tag,
       kind,
       submitVia: kind === "submit" ? "click" : undefined,
       description:
@@ -139,6 +142,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
       elements.push({
         id: `e${elements.length + 1}`,
         attr: el.attr,
+        tag: el.tag,
         kind: "submit",
         submitVia: "enter",
         description: `${el.tag} "${label}" (submit the form now)`,
@@ -163,6 +167,14 @@ export function buildCriteria(elements: PageElement[]): Record<string, string> {
 
 export function selectorFor(el: PageElement): string {
   return `[data-jev-id="${el.attr}"]`;
+}
+
+/** Fallback when data-jev-id is lost to a re-render: match by aria-label or tag + text. */
+export function fallbackSelectorFor(el: PageElement): string | null {
+  const text = el.description.match(/"([^"]*)"/)?.[1];
+  if (!text) return null;
+  const escaped = text.replace(/"/g, '\\"');
+  return `[aria-label="${escaped}"], ${el.tag}:has-text("${escaped}")`;
 }
 
 /** Next-best action from a Choice distribution, excluding known-bad options. */

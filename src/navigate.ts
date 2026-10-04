@@ -34,6 +34,7 @@ import {
 import { selectOptionQuestion, stepQuestions } from "./questions.js";
 import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, validateSecretBuffer, type Redactor } from "./password.js";
 import { InvalidJevAnswer, type JevTransport, type JevAnswer } from "./provider.js";
+import { fallbackSelectorFor } from "./lib.js";
 import { askLadder, type LadderHit } from "./ladder-ask.js";
 import { confidenceFloor } from "./ladder.js";
 import { openrouterDecisions } from "./openrouter-decisions.js";
@@ -1053,7 +1054,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
             }
           }
         } else {
-          await page.click(selectorFor(element), { timeout: bounded(4_000) });
+          const primary = selectorFor(element);
+          await page.click(primary, { timeout: bounded(4_000) }).catch(async () => {
+            const fb = fallbackSelectorFor(element);
+            if (!fb || fb === primary) throw new Error(`element ${element.attr} not found by stamp or fallback`);
+            await page.click(fb, { timeout: bounded(4_000) });
+          });
           detail = element.description;
         }
       } catch (error) {
