@@ -1,6 +1,6 @@
 {
   "name": "@jkudish/jev-browser",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "A Jev-driven browser agent: give it a task and a start URL; typed Choice actions, stop/stuck safety gates, the final page, an auditable step trace, and a screenshot. MCP server, CLI, or library.",
   "type": "module",
   "license": "MIT",
@@ -59,7 +59,7 @@
     "@ai-sdk/google": "^4.0.88",
     "@ai-sdk/openai": "^4.0.84",
     "@ai-sdk/openai-compatible": "^3.0.63",
-    "@jkudish/jev-agent-tools": "^0.1.4",
+    "@jkudish/jev-agent-tools": "^0.2.0",
     "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/server": "^2.3.1",
     "@typesafe-ai/sdk": "^0.6.0",

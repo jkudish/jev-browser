@@ -125,6 +125,14 @@ test("buildCriteria exposes the distinct search, type, and submit wordings", () 
   assert.match(criteria["submit_e4"], /submit the form now/);
 });
 
+test("action descriptions use ARIA roles to separate same-text controls", () => {
+  const { elements } = buildActionSpace([
+    el({ attr: "j1", tag: "button", role: "button", text: "Duration", href: "" }),
+    el({ attr: "j2", tag: "li", role: "menuitemradio", text: "Duration", href: "" }),
+  ]);
+  assert.deepEqual(elements.map((element) => element.description), ['button "Duration"', 'menuitemradio "Duration"']);
+});
+
 test("buildActionSpace caps at MAX_ELEMENTS and reports truncation", () => {
   const many = Array.from({ length: 400 }, (_, i) => el({ attr: `j${i + 1}`, text: `Link ${i}`, href: `https://x.example/${i}` }));
   const { elements, truncated } = buildActionSpace(many);
@@ -1577,6 +1585,65 @@ test("only modal dialogs hijack the excerpt; a plain open dialog and an empty vi
     await page.goto(`${origin}/empty`);
     await navigate({ task: "check", page, transport, maxSteps: 1, screenshot: "none" });
     assert.equal(states[2].page_text_excerpt, "", "no visible text means an honest empty excerpt, not the unseen body start");
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test("ARIA menu items are actionable and same-length dialog updates count as changes", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  const { createServer } = await import("node:http");
+  const page = `<!doctype html><html><head><title>Flights</title></head><body>
+    <button>Duration</button><ul role="menu"><li role="menuitemradio" aria-checked="false">Duration</li></ul>
+    <div role="dialog" aria-modal="true" style="position:fixed;top:120px;left:10px;background:#fff">
+      <p id="count">Adults 1</p><button aria-label="Add adult">+</button>
+    </div>
+    <script>
+      document.querySelector('[role="menuitemradio"]').addEventListener('click', (event) => event.currentTarget.setAttribute('aria-checked', 'true'));
+      document.querySelector('[aria-label="Add adult"]').addEventListener('click', () => { document.getElementById('count').textContent = 'Adults 2'; });
+    </script></body></html>`;
+  const server = createServer((_req, res) => {
+    res.setHeader("content-type", "text/html; charset=utf-8");
+    res.end(page);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const criteria = [];
+  const transport = {
+    name: "fixture",
+    async ask({ questions }) {
+      const actions = questions.action.criteria;
+      criteria.push(actions);
+      const choice = Object.keys(actions).find((key) => actions[key] === 'button "Add adult"');
+      assert.ok(choice, "the add-adult button is offered");
+      return {
+        answers: {
+          action: { type: "choice", choice, confidence: 1, probabilities: Object.fromEntries(Object.keys(actions).map((key) => [key, key === choice ? 1 : 0])) },
+          goal_done: { type: "noul", noul: 0 },
+          stuck: { type: "noul", noul: 0 },
+        },
+        usage: { input_tokens: 1, output_tokens: 1 },
+        model: "fixture",
+      };
+    },
+  };
+  try {
+    const browserPage = await browser.newPage();
+    await browserPage.goto(`http://127.0.0.1:${server.address().port}/`);
+    const result = await navigate({ task: "add an adult", page: browserPage, transport, maxSteps: 1, screenshot: "none" });
+    assert.ok(Object.values(criteria[0]).includes('menuitemradio "Duration"'), "the ARIA sort item is in the action space");
+    assert.ok(Object.values(criteria[0]).includes('button "Duration"'), "the same-text filter remains distinct");
+    assert.equal(result.steps[0].outcome, "page content changed");
+    assert.equal(await browserPage.locator("#count").textContent(), "Adults 2");
   } finally {
     await browser.close();
     server.close();

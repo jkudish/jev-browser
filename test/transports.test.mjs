@@ -126,16 +126,18 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
   const calls = [];
   await withFetch(async (url, init) => {
     calls.push({ url, init });
-    return Response.json({ answers, usage });
+    return Response.json(calls.length === 1 ? { answers, usage, model: "typesafe/jev-1.13-20260917" } : { answers, usage });
   }, async () => {
     const transport = builtin("openrouter", { OPENROUTER_API_KEY: "sk-or-secret" });
-    assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13");
+    assert.equal((await askJev(transport, input)).model, "typesafe/jev-1.13-20260917");
     assert.equal((await askJev(transport, { ...input, model: "typesafe/jev-1.12" })).model, "typesafe/jev-1.12");
+    assert.equal((await askJev(transport, { ...input, model: "~typesafe/jev-latest" })).model, "~typesafe/jev-latest");
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/jev-browser", "X-Title": "jev-browser", "X-OpenRouter-Title": "jev-browser" });
     assert.equal(calls[0].init.signal, signal);
-    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "typesafe/jev-1.13", state: input.state, questions });
+    assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
+    assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest"]);
   });
   for (const response of [new Response("body-secret", { status: 403 }), new Response("body-secret", { status: 200 })]) {
     await withFetch(async () => response, async () => {

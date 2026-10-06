@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.4
+
+- The browser can act on ARIA menu items, options, tabs, switches, and radios. Same-text controls show their role, and visible dialog updates count as page changes. Reimplemented from ideas in [#22](https://github.com/jkudish/jev-browser/pull/22) by [@yaukitdev1-cpu](https://github.com/yaukitdev1-cpu).
+- Jev transport updated to `@jkudish/jev-agent-tools` 0.2.0: OpenRouter `jev-latest` follows `~typesafe/jev-latest`, and Vercel accepts the opt-in `JEV_VERCEL_ZERO_DATA_RETENTION` routing setting.
+- Dependency updates: MCP SDK 2.3.1 and AI SDK 7.0.128 with typing-provider patches.
+
 ## 0.8.3
 
 - Updated AI SDK typing dependencies.
