@@ -18,7 +18,7 @@ import {
   detectBotProtection,
   heuristicQuery,
   pickAlternate,
-  PRICE_PER_MTOK_IN,
+  pricePerMTokIn,
   RawElement,
   resolveCookies,
   resolveTypingSelection,
@@ -131,7 +131,7 @@ async function askJev(budget: RunBudget, state: unknown, questions: Record<strin
   budget.usage.jev_calls += 1;
   budget.usage.input_tokens += result.usage.input_tokens;
   budget.usage.output_tokens += result.usage.output_tokens;
-  budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * PRICE_PER_MTOK_IN;
+  budget.usage.est_cost_usd = (budget.usage.input_tokens / 1e6) * pricePerMTokIn(budget.provider);
   return result.answers;
 }
 

@@ -471,6 +471,8 @@ Jev judgments ride on the shared [@jkudish/jev-agent-tools](https://github.com/j
 - **Cloudflare Workers AI** (`CLOUDFLARE_API_TOKEN` or `JEV_CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`).
 - **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`).
 
+A fifth carrier, **OpenAI Decisions** (`JEV_OPENAI_API_KEY` or `OPENAI_API_KEY`), runs only with `JEV_PROVIDER=openai` and is never auto-detected, because `OPENAI_API_KEY` may already be configured for typing. It maps `jev-latest` to `gpt-6-luna`, which is a different model from Jev: the `goal_done` and `stuck` stop thresholds (0.85) were tuned on Jev and are unverified on it. Cost estimates use its $0.10 per million input tokens.
+
 `JEV_PROVIDER` forces one of them; an unknown name or a missing credential is a configuration error, never a silent fallback. Typing is configured separately with `JEV_BROWSER_TYPE_*`.
 
 The built-ins stay limited to major providers. For anything else, library callers can inject a transport ([Judgment transports in the library](#judgment-transports-in-the-library)), use a published third-party driver package, or publish their own; published drivers get linked here on request. The [add-a-provider guide](https://github.com/jkudish/jev-agent-tools#adding-a-provider) covers all three paths.
@@ -482,7 +484,7 @@ The built-ins stay limited to major providers. For anything else, library caller
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. `JEV_CLOUDFLARE_API_TOKEN` is honored first for separate credentials. |
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway for Jev judgments after the other providers. |
 | `JEV_VERCEL_ZERO_DATA_RETENTION` | unset | `1` or `true` requests Vercel AI Gateway zero-data-retention routing for Jev judgments; use with `JEV_PROVIDER=vercel`. See [Vercel](#vercel). |
-| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, or `vercel` for the Jev calls instead of auto-detection. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
+| `JEV_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `openai` for the Jev calls instead of auto-detection; `openai` is only ever selected this way. Judgment transport only; typing is configured separately with `JEV_BROWSER_TYPE_*`. |
 | `JEV_BROWSER_MODEL` | `jev-latest` | Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. |
 | `JEV_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `JEV_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
