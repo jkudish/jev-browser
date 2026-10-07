@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/discern-browser-banner.png" alt="discern-browser — A browser agent driven by typed judgments. Runs on TypeSafe's Jev or OpenAI Decisions." />
+  <img src=".github/discern-browser-banner.png" alt="discern-browser — A browser agent driven by typed judgments. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
 </p>
 
 Fast and very cheap browser use, driven by structured judgments from TypeSafe's Jev model or OpenAI's Decisions API.
@@ -13,7 +13,7 @@ Formerly `@jkudish/jev-browser`. Existing setups keep working through 1.x; see [
 
 Give discern-browser a task and a URL.
 
-It drives a real headless browser through an MCP server, CLI, or library. A judgment model (TypeSafe's Jev by default, or OpenAI Decisions when you choose it) picks one action per step from the page's clickable, typeable, and selectable elements, and scores how likely it is that the goal is met or the run is stuck. Code owns the loop: budgets, recovery, stop gates. You get the final page, a step trace with confidences, console errors, and a screenshot.
+It drives a real headless browser through an MCP server, CLI, or library. A judgment model (TypeSafe's Jev by default, or Cloudflare's Clef or OpenAI Decisions when you choose it) picks one action per step from the page's clickable, typeable, and selectable elements, and scores how likely it is that the goal is met or the run is stuck. Code owns the loop: budgets, recovery, stop gates. You get the final page, a step trace with confidences, console errors, and a screenshot.
 
 Things it has done on real sites, not demos:
 
@@ -475,6 +475,8 @@ Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/j
 
 A fifth carrier, **OpenAI Decisions** (`DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`), runs only with `DISCERN_PROVIDER=openai` and is never auto-detected, because `OPENAI_API_KEY` may already be configured for typing. It maps `jev-latest` to `gpt-6-luna`, which is a different model from Jev: the `goal_done` and `stuck` stop thresholds (0.85) were tuned on Jev and are unverified on it. Cost estimates use its $0.10 per million input tokens.
 
+The Cloudflare carrier also runs Cloudflare's own [Clef decision models](https://blog.cloudflare.com/clef-decision-models/): set `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`. Clef uses Jev's request and answer format, so nothing is translated. `clef-flash` answers a step in a few hundred milliseconds warm, but it is a different model from Jev, so the 0.85 stop thresholds are unverified on it too; cost estimates still use Jev's input price, because Cloudflare bills Workers AI separately.
+
 `DISCERN_PROVIDER` forces one of them; an unknown name or a missing credential is a configuration error, never a silent fallback. Typing is configured separately with `DISCERN_BROWSER_TYPE_*`.
 
 The built-ins stay limited to major providers. For anything else, library callers can inject a transport ([Judgment transports in the library](#judgment-transports-in-the-library)), use a published third-party driver package, or publish their own; published drivers get linked here on request. The [add-a-provider guide](https://github.com/jkudish/discern-agent-tools#adding-a-provider) covers all three paths.
@@ -487,7 +489,7 @@ The built-ins stay limited to major providers. For anything else, library caller
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway for Jev judgments after the other providers. |
 | `DISCERN_VERCEL_ZERO_DATA_RETENTION` | unset | `1` or `true` requests Vercel AI Gateway zero-data-retention routing for Jev judgments; use with `DISCERN_PROVIDER=vercel`. See [Vercel](#vercel). |
 | `DISCERN_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `openai` for judgment calls instead of auto-detection; `openai` is only ever selected this way. Judgment transport only; typing is configured separately with `DISCERN_BROWSER_TYPE_*`. |
-| `DISCERN_BROWSER_MODEL` | `jev-latest` | Judgment model. Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. With `DISCERN_PROVIDER=openai`, `jev-latest` maps to `gpt-6-luna`. |
+| `DISCERN_BROWSER_MODEL` | `jev-latest` | Judgment model. Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. With `DISCERN_PROVIDER=openai`, `jev-latest` maps to `gpt-6-luna`; with `DISCERN_PROVIDER=cloudflare`, `clef` or `clef-flash` selects Cloudflare's Clef. |
 | `DISCERN_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `DISCERN_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `DISCERN_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |

@@ -4,6 +4,7 @@
 
 Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the package now runs OpenAI's Decisions API as well as TypeSafe's Jev model. Every 0.x name keeps working through 1.x and is removed in 2.0. See the README's [migration section](README.md#migrating-from-jev-browser).
 
+- Cloudflare Clef: `DISCERN_PROVIDER=cloudflare` with `DISCERN_BROWSER_MODEL=clef` or `clef-flash` runs Cloudflare's Clef decision models, via `@jkudish/discern-agent-tools`.
 - Rename: package `@jkudish/discern-browser`, binary `discern-browser`, MCP `serverInfo.name` `discern-browser`, MCP tool `discern_navigate`, and `DISCERN_*` environment variables. Judgment transport is now `@jkudish/discern-agent-tools` 1.0.
 - `jev_navigate` stays callable as an unlisted alias. `DISCERN_TOOL_NAMES=jev` lists `jev_navigate` instead, with `discern_navigate` still callable; any value other than `discern` or `jev` refuses to start.
 - Every `JEV_<X>` variable aliases `DISCERN_<X>`, including `JEV_PASSWORD_*` and `JEV_COOKIE_*` names given to `password_env` and `cookie_env`. Each legacy variable prints one deprecation line to stderr, never stdout. `DISCERN_<X>` wins; two different non-empty values are a configuration error that names both variables and never their values. The Chromium postinstall honors both `DISCERN_BROWSER_SKIP_BROWSER_DOWNLOAD` and `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD`.

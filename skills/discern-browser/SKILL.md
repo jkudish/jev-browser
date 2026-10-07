@@ -10,7 +10,7 @@ mcpServers:
 
 # Discern Browser
 
-One tool, `discern_navigate`: give it a task and a start URL; an agent driven by structured model judgments (TypeSafe's Jev by default, or OpenAI Decisions when the server sets `DISCERN_PROVIDER=openai`) navigates a real headless browser until the goal is met, the stuck gate fires, or a budget is exhausted. It returns the final page in a chosen format, the full step trace with confidences, console/page/network errors captured along the way, token usage with estimated cost, and a final screenshot.
+One tool, `discern_navigate`: give it a task and a start URL; an agent driven by structured model judgments (TypeSafe's Jev by default, or Cloudflare's Clef or OpenAI Decisions when the server selects them) navigates a real headless browser until the goal is met, the stuck gate fires, or a budget is exhausted. It returns the final page in a chosen format, the full step trace with confidences, console/page/network errors captured along the way, token usage with estimated cost, and a final screenshot.
 
 **For a real-site interaction task, call `discern_navigate` when it is available** — unless a static fetch suffices, or the task requires a browser session your client already owns. When the tool is registered but unused, agents answer from assumptions about the page instead of evidence from it.
 

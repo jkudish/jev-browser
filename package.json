@@ -1,7 +1,7 @@
 {
   "name": "@jkudish/discern-browser",
   "version": "1.0.0",
-  "description": "A browser agent driven by structured model judgments (TypeSafe Jev or OpenAI Decisions): give it a task and a start URL; typed Choice actions, stop/stuck safety gates, the final page, an auditable step trace, and a screenshot. MCP server, CLI, or library.",
+  "description": "A browser agent driven by structured model judgments (TypeSafe Jev, Cloudflare Clef, or OpenAI Decisions): give it a task and a start URL; typed Choice actions, stop/stuck safety gates, the final page, an auditable step trace, and a screenshot. MCP server, CLI, or library.",
   "type": "module",
   "license": "MIT",
   "author": "Joey Kudish",
