@@ -11,7 +11,13 @@ import { chromium } from "playwright";
 import { navigate } from "../dist/navigate.js";
 
 const serverPath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
-const hasKey = Boolean(process.env.TYPESAFE_API_KEY);
+// Runs against TypeSafe by default, or against the provider DISCERN_PROVIDER
+// selects (legacy JEV_PROVIDER also works) when its credentials are present.
+const e = process.env;
+const selected = (e.DISCERN_PROVIDER || e.JEV_PROVIDER || "").toLowerCase();
+const hasKey = selected === "openai" ? Boolean(e.DISCERN_OPENAI_API_KEY || e.JEV_OPENAI_API_KEY || e.OPENAI_API_KEY)
+  : selected === "cloudflare" ? Boolean((e.DISCERN_CLOUDFLARE_API_TOKEN || e.JEV_CLOUDFLARE_API_TOKEN || e.CLOUDFLARE_API_TOKEN) && e.CLOUDFLARE_ACCOUNT_ID)
+  : Boolean(e.TYPESAFE_API_KEY);
 
 // Minimal deterministic site: a multi-field form with a submit button (the
 // button carries no type attribute, so it defaults to submit inside the form),

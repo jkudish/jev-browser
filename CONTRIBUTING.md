@@ -19,7 +19,7 @@ npm test            # unit, transport, HTTP, and MCP-client tests, offline
 npm run test:e2e    # live navigation tests, requires TYPESAFE_API_KEY
 ```
 
-Unit tests run everywhere, including CI. End-to-end tests navigate real Wikipedia and DuckDuckGo pages; they run in CI only when a `TYPESAFE_API_KEY` secret is configured, and locally only when the variable is set. Both suites must pass before a pull request can merge.
+Unit tests run everywhere, including CI. End-to-end tests run on TypeSafe by default; set `DISCERN_PROVIDER` (plus that provider's key, and `DISCERN_BROWSER_MODEL=clef` for Clef) to run them elsewhere. They navigate real Wikipedia and DuckDuckGo pages; they run in CI only when a `TYPESAFE_API_KEY` secret is configured, and locally only when the variable is set. Both suites must pass before a pull request can merge.
 
 The DuckDuckGo test is informational on status but asserts clean termination: it exists because DuckDuckGo's accessibility tree hides its search input, which is why element extraction reads the DOM directly. Keep it passing.
 
@@ -33,9 +33,8 @@ The DuckDuckGo test is informational on status but asserts clean termination: it
 
 ## Notes
 
-- Read configuration only through `DISCERN_*` names. Legacy `JEV_*` names are normalized into them at startup (`src/env.ts`); do not read a `JEV_` name directly. The one exception is `scripts/ensure-chromium.mjs`, which runs at postinstall before any package code.
+- Read configuration only through `DISCERN_*` names. Legacy `JEV_*` names are normalized into them at startup (`src/env.ts`); do not read a `JEV_` name directly. Add a new variable outside the `DISCERN_BROWSER_*` family to `BROWSER_ENV_NAMES`. The one exception is `scripts/ensure-chromium.mjs`, which runs at postinstall before any package code.
 - The compatibility package in `compat/jev-browser/` is published separately and is not part of the root package's `files`.
-
-- The action space is capped by the Choice limit of both judgment providers (255 options; 240 elements plus controls). Anything that widens the space must respect that bound.
+- The action space is capped by the judgment providers' Choice limit (255 options; 240 elements plus controls). Anything that widens the space must respect that bound.
 - Every result includes token usage and estimated cost; keep that true for any new judgment call.
 - Failure behavior is fail-closed: errors become failed steps or clean statuses, never hangs.

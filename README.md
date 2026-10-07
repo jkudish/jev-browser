@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/discern-browser-banner.png" alt="discern-browser — A browser agent driven by typed judgments. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
+  <img src=".github/discern-browser-banner.png" alt="discern-browser: a browser agent driven by typed judgments. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
 </p>
 
 Fast and very cheap browser use, driven by structured judgments from TypeSafe's Jev model or OpenAI's Decisions API.
