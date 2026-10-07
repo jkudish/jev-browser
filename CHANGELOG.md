@@ -4,6 +4,7 @@
 
 Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the package now runs OpenAI's Decisions API as well as TypeSafe's Jev model. Every 0.x name keeps working through 1.x and is removed in 2.0. See the README's [migration section](README.md#migrating-from-jev-browser).
 
+- Rate limits, provider outages, configuration errors, and the new judgment deadline are reported as run errors, not as invalid judgment answers.
 - The default judgment model is the neutral `latest` (Jev on Jev carriers, `gpt-6-luna` on OpenAI); `jev-latest` keeps working. Every carrier now gets the shared retries, a 60-second deadline, and a response-size ceiling, and the System One-compatible endpoint (`DISCERN_API_KEY` + `DISCERN_API_BASE_URL`) is available as a carrier.
 - Only this package's documented `JEV_*` variables are aliased (the provider settings, `JEV_BROWSER_*`, `JEV_PASSWORD_*`, `JEV_COOKIE_*`, `JEV_TOOL_NAMES`); other `JEV_*` variables are ignored.
 - Cloudflare Clef: `DISCERN_PROVIDER=cloudflare` with `DISCERN_BROWSER_MODEL=clef` or `clef-flash` runs Cloudflare's Clef decision models, via `@jkudish/discern-agent-tools`.

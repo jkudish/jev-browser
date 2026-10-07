@@ -20,6 +20,8 @@ export interface AskResult {
   model: string;
 }
 
+const TRANSPORT_FAILURES = new Set(["request_failed", "rate_limited", "unavailable", "timeout", "configuration_error"]);
+
 /** Internal marker so a failed judgment cannot be mistaken for a page action error. */
 export class InvalidJudgmentAnswer extends Error {}
 
@@ -27,7 +29,8 @@ export async function askJudgment(transport: DiscernTransport, input: DiscernTra
   const result = await ask(input, { transport });
   if (!result.ok) {
     if (input.signal.aborted) throw input.signal.reason;
-    if (result.code === "request_failed") throw new Error(result.message);
+    // Transport and configuration failures are run errors, never judgments.
+    if (TRANSPORT_FAILURES.has(result.code)) throw new Error(result.message);
     throw new InvalidJudgmentAnswer(result.message);
   }
   // The package redacts unrecognized names; successful injected transports
