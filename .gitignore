@@ -5,4 +5,5 @@ dist/
 .DS_Store
 test-results/
 .playwright/
+discern-browser-record-*/
 jev-browser-record-*/

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for considering a contribution. This package is deliberately small: one MCP tool that navigates a browser with Jev as the decision model and code owning the loop.
+Thanks for considering a contribution. This package is deliberately small: one MCP tool, `discern_navigate`, that navigates a browser with a judgment model making the decisions (TypeSafe's Jev by default, or OpenAI Decisions) and code owning the loop.
 
 ## Development
 
@@ -10,12 +10,12 @@ npm run build
 npm run typecheck
 ```
 
-Node.js 22 or newer. TypeScript, ESM. Playwright drives the browser; the Vercel AI SDK drives the typing generator (any provider); the TypeSafe SDK drives Jev.
+Node.js 22 or newer. TypeScript, ESM. Playwright drives the browser; the Vercel AI SDK drives the typing generator (any provider); [`@jkudish/discern-agent-tools`](https://github.com/jkudish/discern-agent-tools) sends and validates the judgments.
 
 ## Tests
 
 ```bash
-npm test            # unit tests, offline (src/lib.ts surface)
+npm test            # unit, transport, HTTP, and MCP-client tests, offline
 npm run test:e2e    # live navigation tests, requires TYPESAFE_API_KEY
 ```
 
@@ -33,6 +33,9 @@ The DuckDuckGo test is informational on status but asserts clean termination: it
 
 ## Notes
 
-- The action space is capped by Jev's Choice limit (255 options; 240 elements plus controls). Anything that widens the space must respect that bound.
-- Every result includes token usage and estimated cost; keep that true for any new Jev call.
+- Read configuration only through `DISCERN_*` names. Legacy `JEV_*` names are normalized into them at startup (`src/env.ts`); do not read a `JEV_` name directly. The one exception is `scripts/ensure-chromium.mjs`, which runs at postinstall before any package code.
+- The compatibility package in `compat/jev-browser/` is published separately and is not part of the root package's `files`.
+
+- The action space is capped by the Choice limit of both judgment providers (255 options; 240 elements plus controls). Anything that widens the space must respect that bound.
+- Every result includes token usage and estimated cost; keep that true for any new judgment call.
 - Failure behavior is fail-closed: errors become failed steps or clean statuses, never hangs.
