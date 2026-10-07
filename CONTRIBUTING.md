@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for considering a contribution. This package is deliberately small: one MCP tool, `discern_navigate`, that navigates a browser with a judgment model making the decisions (TypeSafe's Jev by default, or OpenAI Decisions) and code owning the loop.
+Thanks for considering a contribution. This package is deliberately small: one MCP tool, `discern_navigate`, that navigates a browser with a judgment model making the decisions (TypeSafe's Jev by default, or Cloudflare's Clef or OpenAI Decisions) and code owning the loop.
 
 ## Development
 

@@ -78,13 +78,22 @@ type ListToolsHandler = (request: unknown, ctx: unknown) => Promise<ListToolsRes
  * has no public listed-versus-callable split (a disabled tool also rejects
  * calls), so this wraps the SDK's own tools/list handler, read through the
  * Protocol class's protected _getRequestHandler accessor. This is the only
- * non-public SDK access in the package (verified on
- * @modelcontextprotocol/server 2.3.1). test/mcp.test.mjs lists tools and
- * calls the hidden name over a real client, so an SDK change fails CI.
+ * non-public SDK access in the package, and discern-mcp uses the same
+ * accessor (verified on @modelcontextprotocol/server 2.3.1). If a future SDK
+ * removes it, the server still starts and lists both names, with one stderr
+ * line, rather than failing every connection. test/mcp.test.mjs lists tools
+ * and calls the hidden name over a real client, so an SDK change fails CI.
  */
+let warnedUnhidden = false;
 function hideFromToolList(instance: McpServer, hidden: string): void {
-  const original = (instance.server as unknown as { _getRequestHandler(method: string): ListToolsHandler | undefined })._getRequestHandler("tools/list");
-  if (typeof original !== "function") throw new Error("MCP SDK tools/list handler not found; cannot hide the legacy tool name");
+  const original = (instance.server as unknown as { _getRequestHandler?(method: string): ListToolsHandler | undefined })._getRequestHandler?.("tools/list");
+  if (typeof original !== "function") {
+    if (!warnedUnhidden) {
+      warnedUnhidden = true;
+      process.stderr.write("[discern-browser] this MCP SDK version cannot hide the tool alias; listing both discern_navigate and jev_navigate.\n");
+    }
+    return;
+  }
   instance.server.removeRequestHandler("tools/list");
   instance.server.setRequestHandler("tools/list", async (request, ctx) => {
     const result = await original(request, ctx);
@@ -97,8 +106,8 @@ server.registerTool(
   {
     title: "Navigate a browser with Discern",
     description:
-      "Give a task and a start URL; an agent driven by structured model judgments (TypeSafe Jev by default, or OpenAI " +
-      "Decisions) navigates a real headless browser until the goal is met, " +
+      "Give a task and a start URL; an agent driven by structured model judgments (TypeSafe Jev by default, or Cloudflare " +
+      "Clef or OpenAI Decisions) navigates a real headless browser until the goal is met, " +
       "the stuck gate fires, or a budget (steps/seconds) is exhausted. Returns the final page in a chosen format " +
       "(text, markdown, html, or an aria snapshot), the full step trace with confidences, console/page/network " +
       "errors captured along the way, token usage with estimated cost, and a final screenshot. " +
