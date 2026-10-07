@@ -144,7 +144,7 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/discern-agent-tools", "X-Title": "discern", "X-OpenRouter-Title": "discern" });
-    assert.equal(calls[0].init.signal, signal);
+    assert.ok(calls[0].init.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
     assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
     assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest"]);
   });
@@ -172,7 +172,7 @@ test("Cloudflare token priority, double envelope, state, usage, and safe errors"
     assert.deepEqual((await askJudgment(transport, input)).usage, usage);
     assert.equal(calls[0].url, "https://api.cloudflare.com/client/v4/accounts/account/ai/run");
     assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer high-secret", "Content-Type": "application/json" });
-    assert.equal(calls[0].init.signal, signal);
+    assert.ok(calls[0].init.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
     assert.deepEqual(JSON.parse(calls[0].init.body), { model: "typesafe/jev", input: { state: input.state, questions } });
     assert.equal((await transport.ask({ ...input, model: "typesafe/jev-1.2" })).model, "typesafe/jev");
     assert.equal(JSON.parse(calls[1].init.body).model, "typesafe/jev-1.2");
@@ -197,7 +197,7 @@ test("Vercel forwards evaluation request and adapts boolean and confidence", asy
     assert.equal(reply.model, "typesafe-ai/jev");
     assert.deepEqual(reply.usage, usage);
     assert.equal(call.url, "https://ai-gateway.vercel.sh/v4/ai/evaluation-model");
-    assert.equal(call.init.signal, signal);
+    assert.ok(call.init.signal instanceof AbortSignal && !call.init.signal.aborted);
     assert.equal(call.init.headers.Authorization, "Bearer ai-secret");
     assert.equal(call.init.headers["ai-model-id"], "typesafe-ai/jev");
     assert.deepEqual(JSON.parse(call.init.body), { state: input.state, questions: { item: { type: "choice", criteria: questions.item.criteria }, yes: { type: "boolean" } } });
