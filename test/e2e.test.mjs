@@ -187,7 +187,8 @@ async function withClient(fn, extraEnv = {}) {
       // under their DISCERN_ names or the legacy JEV_ aliases.
       // DISCERN_OPENAI_API_KEY, not OPENAI_API_KEY, carries the judgment key,
       // so typing-provider selection is unchanged.
-      ...forwarded(["DISCERN_BROWSER_TYPE_MODEL", "DISCERN_PROVIDER", "DISCERN_OPENAI_API_KEY"]),
+      ...forwarded(["DISCERN_BROWSER_TYPE_MODEL", "DISCERN_PROVIDER", "DISCERN_OPENAI_API_KEY", "DISCERN_BROWSER_MODEL", "DISCERN_CLOUDFLARE_API_TOKEN"]),
+      ...(process.env.CLOUDFLARE_ACCOUNT_ID ? { CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID } : {}),
       ...extraEnv,
     },
   });

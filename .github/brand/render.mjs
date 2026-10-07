@@ -59,7 +59,7 @@ body { width: ${width}px; height: ${height}px; background: ${BG}; color: ${FG}; 
 .foot { position: absolute; left: ${80 * scale}px; bottom: ${44 * scale}px; font-family: Mono; font-size: ${17 * scale}px; color: ${MUTED}; }
 </style></head><body><div class="wrap"><div><div class="lockup">${markSvg()}<div class="name">${name}</div></div><div class="tagline">${tagline}</div></div>
 <div class="panel"><div class="cmd"><span class="p">&gt;</span> ${panel.cmd}</div>${panel.rows.map(([k, v, cls = ""]) => `<div class="row"><span>${k}</span><span class="${cls}">${v}</span></div>`).join("")}</div></div>
-<div class="foot">Runs on TypeSafe's Jev or OpenAI Decisions · A third-party tool by Joey Kudish</div></body></html>`;
+<div class="foot">Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions · A third-party tool by Joey Kudish</div></body></html>`;
 
 // Panel values are real outputs, recorded 2026-10-07 on TypeSafe (jev-1.13.0):
 // - discern-mcp: discern_verify, claim "The full test suite passes.", evidence
