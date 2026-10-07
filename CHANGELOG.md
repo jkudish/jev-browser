@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- OpenAI Decisions judgments (spike) with `JEV_PROVIDER=openai`, via the unreleased `@jkudish/jev-agent-tools` OpenAI transport. Never auto-detected. Cost estimates use the answering carrier's input price.
+
 ## 0.8.4
 
 - The browser can act on ARIA menu items, options, tabs, switches, and radios. Same-text controls show their role, and visible dialog updates count as page changes. Reimplemented from ideas in [#22](https://github.com/jkudish/jev-browser/pull/22) by [@yaukitdev1-cpu](https://github.com/yaukitdev1-cpu).

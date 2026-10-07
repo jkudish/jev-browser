@@ -174,6 +174,10 @@ async function withClient(fn, extraEnv = {}) {
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY ?? "",
       ...(process.env.OPENROUTER_API_KEY ? { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY } : {}),
       ...(process.env.JEV_BROWSER_TYPE_MODEL ? { JEV_BROWSER_TYPE_MODEL: process.env.JEV_BROWSER_TYPE_MODEL } : {}),
+      // Optional judgment-carrier override for A/B runs. JEV_OPENAI_API_KEY, not
+      // OPENAI_API_KEY, so typing-provider selection is unchanged.
+      ...(process.env.JEV_PROVIDER ? { JEV_PROVIDER: process.env.JEV_PROVIDER } : {}),
+      ...(process.env.JEV_OPENAI_API_KEY ? { JEV_OPENAI_API_KEY: process.env.JEV_OPENAI_API_KEY } : {}),
       ...extraEnv,
     },
   });
