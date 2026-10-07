@@ -2,12 +2,12 @@
 name: releasing
 description: >
   Releases this package to npm and GitHub. Use when cutting a new version of
-  @jkudish/jev-browser, bumping versions, writing changelogs, publishing to
+  @jkudish/discern-browser, bumping versions, writing changelogs, publishing to
   npm, tagging releases, or troubleshooting a publish that did not go as
   expected.
 ---
 
-# Releasing @jkudish/jev-browser
+# Releasing @jkudish/discern-browser
 
 Two destinations, one gate. The agent stages the npm release; only Joey can
 approve it (passkey, npmjs.com Staged Packages tab). Everything else is
@@ -29,9 +29,22 @@ mechanical and exact.
    which may have moved: `git tag -a v<version> <sha> -m "v<version>: summary"`
    then `git push origin v<version>`.
 7. Create the GitHub release from that tag with the changelog section as notes
-   and the install command `npx -y @jkudish/jev-browser`.
-8. Verify: `npm view @jkudish/jev-browser version --prefer-online` returns the
+   and the install command `npx -y @jkudish/discern-browser`.
+8. Verify: `npm view @jkudish/discern-browser version --prefer-online` returns the
    new version and the release page renders.
+
+## Discern 1.0 (first release under the new name)
+
+- `@jkudish/discern-browser` is a brand-new package, so 1.0.0 is published
+  interactively by Joey (see below), not staged.
+- Release `@jkudish/discern-agent-tools` 1.0.0 first, then refresh this
+  package's lockfile against the registry (`npm install --package-lock-only`)
+  so `npm ci` passes, then release this package.
+- Then publish the compatibility package `@jkudish/jev-browser` 1.0.0 from
+  `compat/jev-browser/` (an existing package, so it stages). It is not in the
+  root package's `files`, and its own `files` list covers what it ships.
+- Rename the GitHub repository to `jkudish/discern-browser` at release; links
+  already point there and GitHub redirects the old name.
 
 ## Rules and traps
 
@@ -53,7 +66,7 @@ mechanical and exact.
 
 - CI green on the release commit.
 - `npx npm@latest stage list` showed the staged version and shasum.
-- Joey approved; `npm view @jkudish/jev-browser version --prefer-online`
+- Joey approved; `npm view @jkudish/discern-browser version --prefer-online`
   returns it.
 - The tag points at the packed sha and the GitHub release exists on that tag.
-- Repository: https://github.com/jkudish/jev-browser
+- Repository: https://github.com/jkudish/discern-browser

@@ -165,19 +165,29 @@ async function startFakeTypingAPI(reply) {
   return { requests, baseUrl: `http://127.0.0.1:${server.address().port}`, close: () => server.close() };
 }
 
+function forwarded(names) {
+  const env = {};
+  for (const name of names) {
+    for (const candidate of [name, name.replace(/^DISCERN_/, "JEV_")]) {
+      if (process.env[candidate]) env[candidate] = process.env[candidate];
+    }
+  }
+  return env;
+}
+
 async function withClient(fn, extraEnv = {}) {
-  const client = new Client({ name: "jev-browser-e2e", version: "0.1.0" });
+  const client = new Client({ name: "discern-browser-e2e", version: "0.1.0" });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
     env: {
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY ?? "",
       ...(process.env.OPENROUTER_API_KEY ? { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY } : {}),
-      ...(process.env.JEV_BROWSER_TYPE_MODEL ? { JEV_BROWSER_TYPE_MODEL: process.env.JEV_BROWSER_TYPE_MODEL } : {}),
-      // Optional judgment-carrier override for A/B runs. JEV_OPENAI_API_KEY, not
-      // OPENAI_API_KEY, so typing-provider selection is unchanged.
-      ...(process.env.JEV_PROVIDER ? { JEV_PROVIDER: process.env.JEV_PROVIDER } : {}),
-      ...(process.env.JEV_OPENAI_API_KEY ? { JEV_OPENAI_API_KEY: process.env.JEV_OPENAI_API_KEY } : {}),
+      // Optional typing-model and judgment-provider overrides for A/B runs,
+      // under their DISCERN_ names or the legacy JEV_ aliases.
+      // DISCERN_OPENAI_API_KEY, not OPENAI_API_KEY, carries the judgment key,
+      // so typing-provider selection is unchanged.
+      ...forwarded(["DISCERN_BROWSER_TYPE_MODEL", "DISCERN_PROVIDER", "DISCERN_OPENAI_API_KEY"]),
       ...extraEnv,
     },
   });
@@ -198,7 +208,7 @@ function payload(result) {
 test("lists the tool", { skip: !hasKey }, async () => {
   await withClient(async (client) => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((t) => t.name), ["jev_navigate"]);
+    assert.deepEqual(tools.map((t) => t.name), ["discern_navigate"]);
   });
 });
 
@@ -206,7 +216,7 @@ test("click-navigation: Coffee -> Espresso", { skip: !hasKey }, async () => {
   await withClient(async (client) => {
     const result = await client.callTool(
       {
-        name: "jev_navigate",
+        name: "discern_navigate",
         arguments: {
           task: "Navigate from the Coffee article to the Wikipedia article about Espresso and stop when you are on it",
           start_url: "https://en.wikipedia.org/wiki/Coffee",
@@ -220,7 +230,11 @@ test("click-navigation: Coffee -> Espresso", { skip: !hasKey }, async () => {
     const body = payload(result);
     assert.ok(["done", "goal_achieved"].includes(body.status), `status was ${body.status}: ${JSON.stringify(body.steps)}`);
     assert.match(body.final_url, /\/wiki\/Espresso/);
-    assert.ok(body.usage.jev_calls >= 2);
+    assert.ok(body.usage.judgment_calls >= 2);
+    // The deprecated 0.x fields carry identical values through 1.x.
+    assert.equal(body.usage.jev_calls, body.usage.judgment_calls);
+    assert.ok(body.judgment_provider);
+    assert.equal(body.jev_provider, body.judgment_provider);
     assert.ok(Array.isArray(body.console_events));
     // The screenshot travels as a separate MCP image block, not in the JSON.
     assert.ok(result.content.some((b) => b.type === "image"), "expected a screenshot image block");
@@ -231,7 +245,7 @@ test("typed search: find the Ristretto article", { skip: !hasKey }, async () => 
   await withClient(async (client) => {
     const result = await client.callTool(
       {
-        name: "jev_navigate",
+        name: "discern_navigate",
         arguments: {
           task: "Search Wikipedia for the espresso-based drink called Ristretto and stop when you are on that article",
           start_url: "https://en.wikipedia.org/wiki/Main_Page",
@@ -252,7 +266,7 @@ test("clean termination on a hard page (informational)", { skip: !hasKey }, asyn
   await withClient(async (client) => {
     const result = await client.callTool(
       {
-        name: "jev_navigate",
+        name: "discern_navigate",
         arguments: {
           task: "Find the TypeSafe AI blog post that introduces Jev and stop on that page",
           start_url: "https://duckduckgo.com/",
@@ -301,7 +315,7 @@ test("label-for inputs appear in the action space and can be typed into", { skip
       async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Type the word tomsmith into the username input field and stop",
             start_url: `http://127.0.0.1:${port}/`,
@@ -330,8 +344,8 @@ test("label-for inputs appear in the action space and can be typed into", { skip
       assert.match(typed.detail ?? "", /^typed "tomsmith" via compatible-endpoint$/);
       },
       {
-        JEV_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1`,
-        JEV_BROWSER_TYPE_MODEL: "fake-typing-model",
+        DISCERN_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1`,
+        DISCERN_BROWSER_TYPE_MODEL: "fake-typing-model",
       },
     );
   } finally {
@@ -354,7 +368,7 @@ test("native selects choose by DOM index, even with filtered blank options", { s
     await withClient(async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Choose Business as the cabin class in the dropdown, then stop",
             start_url: `http://127.0.0.1:${port}/`,
@@ -437,7 +451,7 @@ test("password fill: handoff file consumed, filled, never submitted, never leake
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Fill the password field with the configured password, then stop",
               start_url: `${fixture.origin}/`,
@@ -467,7 +481,7 @@ test("password fill: handoff file consumed, filled, never submitted, never leake
         assert.match(echo.text, /echo: \[REDACTED\]/);
         assertNoSecret(result, body);
       },
-      { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_BROWSER_HANDOFF_DIR: dir },
+      { DISCERN_BROWSER_PASSWORD_ORIGIN: fixture.origin, DISCERN_BROWSER_HANDOFF_DIR: dir },
     );
     await assert.rejects(() => stat(file), /ENOENT/); // consumed at run start
   } finally {
@@ -487,7 +501,7 @@ test("password fill: aria snapshots of an echoing page are scrubbed too", { skip
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Fill the password field with the configured password, then stop",
               start_url: `${fixture.origin}/`,
@@ -511,7 +525,7 @@ test("password fill: aria snapshots of an echoing page are scrubbed too", { skip
         assert.ok(body.page.content.includes("[REDACTED]"), "the aria-label echo must be redacted in the snapshot");
         assertNoSecret(result, body);
       },
-      { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_BROWSER_HANDOFF_DIR: dir },
+      { DISCERN_BROWSER_PASSWORD_ORIGIN: fixture.origin, DISCERN_BROWSER_HANDOFF_DIR: dir },
     );
   } finally {
     await fixture.close();
@@ -530,7 +544,7 @@ test("password fill: wrong-origin pages are refused and the value never lands", 
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Fill the password field with the configured password, then stop",
               start_url: `${fixture.origin}/`,
@@ -553,7 +567,7 @@ test("password fill: wrong-origin pages are refused and the value never lands", 
         assertNoSecret(result, body);
       },
       // Trust anchor points elsewhere: every fill on the fixture origin is refused.
-      { JEV_BROWSER_PASSWORD_ORIGIN: "http://127.0.0.1:9", JEV_BROWSER_HANDOFF_DIR: dir },
+      { DISCERN_BROWSER_PASSWORD_ORIGIN: "http://127.0.0.1:9", DISCERN_BROWSER_HANDOFF_DIR: dir },
     );
   } finally {
     await fixture.close();
@@ -561,20 +575,20 @@ test("password fill: wrong-origin pages are refused and the value never lands", 
   }
 });
 
-test("password fill: JEV_PASSWORD_* env path works; other names are rejected", { skip: !hasKey }, async () => {
+test("password fill: DISCERN_PASSWORD_* env path works; other names are rejected", { skip: !hasKey }, async () => {
   const fixture = await serveFixture("password.html");
   try {
     await withClient(
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Fill the password field with the configured password, then stop",
               start_url: `${fixture.origin}/`,
               max_steps: 5,
               max_seconds: 60,
-              password_env: "JEV_PASSWORD_E2E",
+              password_env: "DISCERN_PASSWORD_E2E",
             },
           },
           undefined,
@@ -588,16 +602,16 @@ test("password fill: JEV_PASSWORD_* env path works; other names are rejected", {
         // A non-prefixed name is rejected before its value is ever read.
         const rejected = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: { task: "x", start_url: `${fixture.origin}/`, password_env: "TYPESAFE_API_KEY" },
           },
           undefined,
           { timeout: 30_000 },
         );
         assert.equal(rejected.isError, true);
-        assert.match(rejected.content.find((b) => b.type === "text").text, /JEV_PASSWORD_/);
+        assert.match(rejected.content.find((b) => b.type === "text").text, /DISCERN_PASSWORD_/);
       },
-      { JEV_BROWSER_PASSWORD_ORIGIN: fixture.origin, JEV_PASSWORD_E2E: SECRET },
+      { DISCERN_BROWSER_PASSWORD_ORIGIN: fixture.origin, DISCERN_PASSWORD_E2E: SECRET },
     );
   } finally {
     await fixture.close();
@@ -636,9 +650,9 @@ test("password fill: CLI stdin path works and never leaks the secret", { skip: !
   }
 });
 
-test("password fill: PWDEBUG is refused before any browser or Jev work", async () => {
+test("password fill: PWDEBUG is refused before any browser or judgment work", async () => {
   // The preflight runs inside the CLI's credential-setup block, before
-  // stdin is read or any browser/Jev client exists: the run must fail fast
+  // stdin is read or any browser/judgment client exists: the run must fail fast
   // with the debug refusal, with no API key needed.
   const child = spawn(
     process.execPath,
@@ -669,15 +683,15 @@ test("password fill: misconfigured handoff files fail loudly, before any browser
         const cases = [
           [{ task: "x", start_url: "https://example.com/", password_file: loose }, /0600/],
           [{ task: "x", start_url: "https://example.com/", password_file: "/etc/passwd" }, /inside the handoff directory/],
-          [{ task: "x", start_url: "https://example.com/", password_file: loose, password_env: "JEV_PASSWORD_E2E" }, /at most one/],
+          [{ task: "x", start_url: "https://example.com/", password_file: loose, password_env: "DISCERN_PASSWORD_E2E" }, /at most one/],
         ];
         for (const [args, pattern] of cases) {
-          const rejected = await client.callTool({ name: "jev_navigate", arguments: args }, undefined, { timeout: 30_000 });
+          const rejected = await client.callTool({ name: "discern_navigate", arguments: args }, undefined, { timeout: 30_000 });
           assert.equal(rejected.isError, true, JSON.stringify(args));
           assert.match(rejected.content.find((b) => b.type === "text").text, pattern);
         }
       },
-      { JEV_BROWSER_PASSWORD_ORIGIN: "https://example.com", JEV_BROWSER_HANDOFF_DIR: dir, JEV_PASSWORD_E2E: SECRET },
+      { DISCERN_BROWSER_PASSWORD_ORIGIN: "https://example.com", DISCERN_BROWSER_HANDOFF_DIR: dir, DISCERN_PASSWORD_E2E: SECRET },
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -692,7 +706,7 @@ test("multi-field form: typing fields does not submit the form", { skip: !hasKey
       async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Enter Ada as the First name and Oslo as the City on the club signup form, then stop. Do not submit the form.",
             start_url: `${site.baseUrl}/join`,
@@ -718,7 +732,7 @@ test("multi-field form: typing fields does not submit the form", { skip: !hasKey
       );
       assert.equal(body.degraded, false);
       },
-      { JEV_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1` },
+      { DISCERN_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1` },
     );
   } finally {
     typing.close();
@@ -734,7 +748,7 @@ test("search flow: type then submit reaches the results page", { skip: !hasKey }
       async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: 'Search this site for "ristretto" and stop on the results page',
             start_url: `${site.baseUrl}/find`,
@@ -764,7 +778,7 @@ test("search flow: type then submit reaches the results page", { skip: !hasKey }
       assert.match(submitStep.detail ?? "", /Enter/, `unexpected submit detail: ${submitStep.detail}`);
       assert.equal(body.degraded, false);
       },
-      { JEV_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1` },
+      { DISCERN_BROWSER_TYPE_BASE_URL: `${typing.baseUrl}/v1` },
     );
   } finally {
     typing.close();
@@ -778,7 +792,7 @@ test("form submission: the submit button is a submit_eN action", { skip: !hasKey
     await withClient(async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Submit the club signup form and stop on the confirmation page",
             start_url: `${site.baseUrl}/join`,
@@ -819,7 +833,7 @@ test("input submit control: the value attribute labels it", { skip: !hasKey }, a
     await withClient(async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Submit the payment form and stop on the confirmation page",
             start_url: `${site.baseUrl}/pay`,
@@ -858,7 +872,7 @@ test("input submit without a value keeps the default Submit label", { skip: !has
     await withClient(async (client) => {
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Submit the RSVP form and stop on the confirmation page",
             start_url: `${site.baseUrl}/rsvp`,
@@ -926,14 +940,14 @@ test("password fill: injected page works under the same guards and never closes 
 
 // ── Issue #2: typing degradation is visible and ordinary fields never get soup ──
 
-// The dead typing provider: a strict JEV_BROWSER_TYPE_PROVIDER=openrouter
+// The dead typing provider: a strict DISCERN_BROWSER_TYPE_PROVIDER=openrouter
 // selection whose endpoint points at a closed port. The run must complete
 // (no isError), the type_eN step must record an action error and type
 // nothing, and the result must carry the structured degradation records.
 const DEAD_TYPING_ENV = {
-  JEV_BROWSER_TYPE_PROVIDER: "openrouter",
+  DISCERN_BROWSER_TYPE_PROVIDER: "openrouter",
   OPENROUTER_API_KEY: "sk-or-v1-0000000000000000000000000000",
-  JEV_BROWSER_TYPE_BASE_URL: "http://127.0.0.1:1",
+  DISCERN_BROWSER_TYPE_BASE_URL: "http://127.0.0.1:1",
 };
 
 test("degraded type_eN: a dead typing provider types nothing and reports structured warnings (#2)", async () => {
@@ -951,7 +965,7 @@ test("degraded type_eN: a dead typing provider types nothing and reports structu
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Type the word tomsmith into the username input field and stop",
               start_url: `http://127.0.0.1:${port}/`,
@@ -998,7 +1012,7 @@ test("degraded search_eN: a dead typing provider still searches via the keyword 
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: 'Search this site for "ristretto" and stop on the results page',
               start_url: `${site.baseUrl}/lookup`,
@@ -1036,28 +1050,28 @@ test("degraded search_eN: a dead typing provider still searches via the keyword 
   }
 });
 
-test("JEV_BROWSER_TYPE_PROVIDER is strict: unknown provider or missing key refuses to start (#2)", async () => {
+test("DISCERN_BROWSER_TYPE_PROVIDER is strict: unknown provider or missing key refuses to start (#2)", async () => {
   await withClient(
     async (client) => {
       const args = {
-        name: "jev_navigate",
+        name: "discern_navigate",
         arguments: { task: "x", start_url: "https://example.com/", max_steps: 1, max_seconds: 10 },
       };
       // An unknown value names no provider at all, on every call: no key
       // in the environment can rescue it and no other provider is tried.
       const unknown = await client.callTool(args, undefined, { timeout: 30_000 });
       assert.equal(unknown.isError, true);
-      assert.match(unknown.content.find((b) => b.type === "text").text, /JEV_BROWSER_TYPE_PROVIDER "bogus" is not a known typing provider/);
+      assert.match(unknown.content.find((b) => b.type === "text").text, /DISCERN_BROWSER_TYPE_PROVIDER "bogus" is not a known typing provider/);
       const unknownAgain = await client.callTool(args, undefined, { timeout: 30_000 });
       assert.equal(unknownAgain.isError, true);
     },
-    { JEV_BROWSER_TYPE_PROVIDER: "bogus" },
+    { DISCERN_BROWSER_TYPE_PROVIDER: "bogus" },
   );
   await withClient(
     async (client) => {
       const rejected = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: { task: "x", start_url: "https://example.com/", max_steps: 1, max_seconds: 10 },
         },
         undefined,
@@ -1066,19 +1080,19 @@ test("JEV_BROWSER_TYPE_PROVIDER is strict: unknown provider or missing key refus
       assert.equal(rejected.isError, true);
       assert.match(rejected.content.find((b) => b.type === "text").text, /ANTHROPIC_API_KEY/);
     },
-    { JEV_BROWSER_TYPE_PROVIDER: "anthropic" },
+    { DISCERN_BROWSER_TYPE_PROVIDER: "anthropic" },
   );
 });
 
 test("CLI: a strict typing-config failure exits nonzero with one stderr line (#2)", async () => {
   const child = spawn(process.execPath, [serverPath, "run", "x", "https://example.com/"], {
-    env: { ...process.env, JEV_BROWSER_TYPE_PROVIDER: "bogus", TYPESAFE_API_KEY: "" },
+    env: { ...process.env, DISCERN_BROWSER_TYPE_PROVIDER: "bogus", TYPESAFE_API_KEY: "" },
   });
   let stderr = "";
   child.stderr.on("data", (chunk) => (stderr += chunk));
   const code = await new Promise((resolve) => child.on("close", (exitCode) => resolve(exitCode)));
   assert.notEqual(code, 0, `expected a nonzero exit, stderr: ${stderr}`);
-  assert.match(stderr, /navigate: .*JEV_BROWSER_TYPE_PROVIDER/);
+  assert.match(stderr, /navigate: .*DISCERN_BROWSER_TYPE_PROVIDER/);
 });
 
 test("allow_typing false ignores typing configuration entirely (#2)", async () => {
@@ -1096,7 +1110,7 @@ test("allow_typing false ignores typing configuration entirely (#2)", async () =
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "The task is already complete; stop immediately without doing anything",
               start_url: `http://127.0.0.1:${port}/`,
@@ -1118,7 +1132,7 @@ test("allow_typing false ignores typing configuration entirely (#2)", async () =
         assert.equal(body.typing_provider, null);
         assert.equal(body.typing_model, null);
       },
-      { JEV_BROWSER_TYPE_PROVIDER: "bogus" },
+      { DISCERN_BROWSER_TYPE_PROVIDER: "bogus" },
     );
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -1127,7 +1141,7 @@ test("allow_typing false ignores typing configuration entirely (#2)", async () =
 
 // ── Bot protection: Cloudflare interstitials are named, not reasoned about ──
 
-test("bot protection: a persistent challenge stops the run before any Jev call", { skip: !hasKey }, async () => {
+test("bot protection: a persistent challenge stops the run before any judgment call", { skip: !hasKey }, async () => {
   const site = await startFixtureSite();
   try {
     const body = await navigate({
@@ -1142,7 +1156,7 @@ test("bot protection: a persistent challenge stops the run before any Jev call",
     assert.equal(body.bot_protection.kind, "challenge");
     assert.ok(body.bot_protection.evidence.some((e) => e.startsWith("title ")));
     assert.ok(body.bot_protection.guidance.length > 0);
-    assert.equal(body.usage.jev_calls, 0, "no Jev call may be spent on an interstitial");
+    assert.equal(body.usage.judgment_calls, 0, "no judgment call may be spent on an interstitial");
     assert.equal(body.steps.length, 0, "no steps may be recorded on an interstitial");
     assert.match(body.final_title, /Just a moment/);
   } finally {
@@ -1163,7 +1177,7 @@ test("bot protection: a hard block stops the run immediately with kind block", {
     assert.equal(body.status, "blocked");
     assert.equal(body.bot_protection.kind, "block");
     assert.ok(body.bot_protection.guidance.includes("different network"));
-    assert.equal(body.usage.jev_calls, 0);
+    assert.equal(body.usage.judgment_calls, 0);
     assert.equal(body.steps.length, 0);
     assert.ok(Date.now() - started < 10_000, "a hard block gets no challenge wait-out window");
   } finally {
@@ -1183,7 +1197,7 @@ test("bot protection: a challenge that clears itself within its window lets the 
     assert.ok(body.status === "done" || body.status === "goal_achieved", `run should complete, got ${body.status}`);
     assert.equal(body.bot_protection, undefined, "a cleared challenge must not leave bot_protection set");
     assert.equal(body.final_title, "Welcome in");
-    assert.ok(body.usage.jev_calls >= 1, "the run must proceed to real Jev steps after the challenge clears");
+    assert.ok(body.usage.judgment_calls >= 1, "the run must proceed to real judgment steps after the challenge clears");
   } finally {
     site.close();
   }
@@ -1202,7 +1216,7 @@ test("bot protection: the cf-mitigated header alone never stops a run, only anno
     assert.ok(body.bot_protection, "the header signal should be annotated");
     assert.deepEqual(body.bot_protection.evidence, ["header cf-mitigated: challenge"]);
     assert.equal(body.final_title, "Coffee menu");
-    assert.ok(body.usage.jev_calls >= 1);
+    assert.ok(body.usage.judgment_calls >= 1);
   } finally {
     site.close();
   }
@@ -1223,7 +1237,7 @@ test("bot protection: a wall that appears on the final page flips the status ins
     assert.equal(body.status, "blocked", `expected blocked, got ${body.status}: ${JSON.stringify(body.steps)}`);
     assert.equal(body.bot_protection.kind, "challenge");
     assert.equal(body.steps.length, 1);
-    assert.equal(body.usage.jev_calls, 1);
+    assert.equal(body.usage.judgment_calls, 1);
     assert.match(body.steps[0].executed_action ?? "", /^click_/);
     assert.match(body.final_title, /Just a moment/);
   } finally {
@@ -1248,7 +1262,7 @@ test("bot protection: a final-page challenge that clears in its window reports t
     assert.equal(body.bot_protection, undefined, "a cleared final-page challenge must not leave bot_protection set");
     assert.equal(body.final_title, "Welcome in");
     assert.equal(body.steps.length, 1);
-    assert.equal(body.usage.jev_calls, 1);
+    assert.equal(body.usage.judgment_calls, 1);
     assert.match(body.steps[0].executed_action ?? "", /^click_/);
   } finally {
     site.close();
@@ -1271,7 +1285,7 @@ test("bot protection: a challenge the budget cannot verify keeps the timeout out
     assert.equal(body.status, "timeout", `expected timeout, got ${body.status}`);
     assert.ok(body.bot_protection, "the unverified wall must still be annotated");
     assert.equal(body.bot_protection.kind, "challenge");
-    assert.equal(body.usage.jev_calls, 0);
+    assert.equal(body.usage.judgment_calls, 0);
     assert.equal(body.steps.length, 0);
   } finally {
     site.close();
@@ -1293,7 +1307,7 @@ test("bot protection: brand evidence past the short body slice still stops the r
     assert.equal(body.status, "blocked", `expected blocked, got ${body.status}`);
     assert.equal(body.bot_protection.kind, "challenge");
     assert.ok(body.bot_protection.evidence.some((e) => e.startsWith("title ")));
-    assert.equal(body.usage.jev_calls, 0);
+    assert.equal(body.usage.judgment_calls, 0);
     assert.equal(body.steps.length, 0);
   } finally {
     site.close();
@@ -1381,7 +1395,7 @@ test("cookie seeding: handoff file consumed, gated page reached, echo redacted",
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Open the newest order and stop on it",
               start_url: `${site.baseUrl}/private`,
@@ -1420,7 +1434,7 @@ test("cookie seeding: handoff file consumed, gated page reached, echo redacted",
         assertNoSecret(result, body, COOKIE_LONG);
         assertNoSecret(result, body, COOKIE_SHORT);
       },
-      { JEV_BROWSER_HANDOFF_DIR: dir },
+      { DISCERN_BROWSER_HANDOFF_DIR: dir },
     );
     // One-shot handoff: both files were consumed at run start.
     await assert.rejects(() => stat(sessionFile), /ENOENT/);
@@ -1438,15 +1452,15 @@ test("cookie seeding: cookie_env delivery works under the same guards", { skip: 
       async (client) => {
         const result = await client.callTool(
           {
-            name: "jev_navigate",
+            name: "discern_navigate",
             arguments: {
               task: "Open the newest order and stop on it",
               start_url: `${site.baseUrl}/private`,
               max_steps: 5,
               max_seconds: 60,
               cookie_env: [
-                { name: "session", env: "JEV_COOKIE_SESSION" },
-                { name: "prefs", env: "JEV_COOKIE_PREFS" },
+                { name: "session", env: "DISCERN_COOKIE_SESSION" },
+                { name: "prefs", env: "DISCERN_COOKIE_PREFS" },
               ],
             },
           },
@@ -1461,7 +1475,7 @@ test("cookie seeding: cookie_env delivery works under the same guards", { skip: 
         assertNoSecret(result, body, COOKIE_LONG);
         assertNoSecret(result, body, COOKIE_SHORT);
       },
-      { JEV_COOKIE_SESSION: COOKIE_LONG, JEV_COOKIE_PREFS: COOKIE_SHORT },
+      { DISCERN_COOKIE_SESSION: COOKIE_LONG, DISCERN_COOKIE_PREFS: COOKIE_SHORT },
     );
   } finally {
     await site.close();
@@ -1477,12 +1491,12 @@ test("cookie seeding: bad ingress is refused loudly, before any browser", async 
     await withClient(
       async (client) => {
         const cases = [
-          // A value reference must be operator-opted-in: only JEV_COOKIE_*
+          // A value reference must be operator-opted-in: only DISCERN_COOKIE_*
           // names are ever looked up.
-          [{ task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "SESSION" }] }, /must name a JEV_COOKIE_\* variable/],
+          [{ task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "SESSION" }] }, /must name a DISCERN_COOKIE_\* variable/],
           // File and env ingress are alternatives, not a mix.
           [
-            { task: "x", start_url: "https://example.com/", cookie_file: [{ name: "session", file: good }], cookie_env: [{ name: "prefs", env: "JEV_COOKIE_PREFS" }] },
+            { task: "x", start_url: "https://example.com/", cookie_file: [{ name: "session", file: good }], cookie_env: [{ name: "prefs", env: "DISCERN_COOKIE_PREFS" }] },
             /at most one of cookie_file and cookie_env/,
           ],
           // Two cookies with the same name would fight in the jar.
@@ -1493,15 +1507,15 @@ test("cookie seeding: bad ingress is refused loudly, before any browser", async 
           // Handoff files live inside the handoff directory, like password_file.
           [{ task: "x", start_url: "https://example.com/", cookie_file: [{ name: "session", file: "/etc/passwd" }] }, /inside the handoff directory/],
           // Values are validated like passwords before any run starts.
-          [{ task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "JEV_COOKIE_SHORT" }] }, /cookie "session" is shorter than/],
+          [{ task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "DISCERN_COOKIE_SHORT" }] }, /cookie "session" is shorter than/],
         ];
         for (const [args, pattern] of cases) {
-          const rejected = await client.callTool({ name: "jev_navigate", arguments: args }, undefined, { timeout: 30_000 });
+          const rejected = await client.callTool({ name: "discern_navigate", arguments: args }, undefined, { timeout: 30_000 });
           assert.equal(rejected.isError, true, JSON.stringify(args));
           assert.match(rejected.content.find((b) => b.type === "text").text, pattern);
         }
       },
-      { JEV_BROWSER_HANDOFF_DIR: dir, JEV_COOKIE_SESSION: COOKIE_LONG, JEV_COOKIE_SHORT: "abc", JEV_COOKIE_PREFS: COOKIE_SHORT },
+      { DISCERN_BROWSER_HANDOFF_DIR: dir, DISCERN_COOKIE_SESSION: COOKIE_LONG, DISCERN_COOKIE_SHORT: "abc", DISCERN_COOKIE_PREFS: COOKIE_SHORT },
     );
     // Playwright debug output would bypass the redaction layer; cookie runs
     // inherit the password run's refusal, in its own environment.
@@ -1509,8 +1523,8 @@ test("cookie seeding: bad ingress is refused loudly, before any browser", async 
       async (client) => {
         const debugged = await client.callTool(
           {
-            name: "jev_navigate",
-            arguments: { task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "JEV_COOKIE_SESSION" }] },
+            name: "discern_navigate",
+            arguments: { task: "x", start_url: "https://example.com/", cookie_env: [{ name: "session", env: "DISCERN_COOKIE_SESSION" }] },
           },
           undefined,
           { timeout: 30_000 },
@@ -1518,7 +1532,7 @@ test("cookie seeding: bad ingress is refused loudly, before any browser", async 
         assert.equal(debugged.isError, true);
         assert.match(debugged.content.find((b) => b.type === "text").text, /PWDEBUG/);
       },
-      { JEV_COOKIE_SESSION: COOKIE_LONG, PWDEBUG: "1" },
+      { DISCERN_COOKIE_SESSION: COOKIE_LONG, PWDEBUG: "1" },
     );
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1646,7 +1660,7 @@ test("stateless HTTP: real navigation with a screenshot through --http (2026-07-
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY ?? "",
       HOST: "127.0.0.1",
       PORT: "0",
-      JEV_BROWSER_AUTH_TOKEN: TOKEN,
+      DISCERN_BROWSER_AUTH_TOKEN: TOKEN,
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -1662,7 +1676,7 @@ test("stateless HTTP: real navigation with a screenshot through --http (2026-07-
   });
   try {
     const client = new Client(
-      { name: "jev-browser-http-e2e", version: "0.1.0" },
+      { name: "discern-browser-http-e2e", version: "0.1.0" },
       { versionNegotiation: { mode: { pin: "2026-07-28" } } },
     );
     await client.connect(
@@ -1673,7 +1687,7 @@ test("stateless HTTP: real navigation with a screenshot through --http (2026-07-
       assert.equal(client.getProtocolEra(), "modern");
       const result = await client.callTool(
         {
-          name: "jev_navigate",
+          name: "discern_navigate",
           arguments: {
             task: "Read the page and report the coffee list shown on it, then stop.",
             start_url: `${site.baseUrl}/mitigated`,

@@ -1,8 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (unreleased)
 
-- OpenAI Decisions judgments (spike) with `JEV_PROVIDER=openai`, via the unreleased `@jkudish/jev-agent-tools` OpenAI transport. Never auto-detected. Cost estimates use the answering carrier's input price.
+Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the package now runs OpenAI's Decisions API as well as TypeSafe's Jev model. Every 0.x name keeps working through 1.x and is removed in 2.0. See the README's [migration section](README.md#migrating-from-jev-browser).
+
+- Rename: package `@jkudish/discern-browser`, binary `discern-browser`, MCP `serverInfo.name` `discern-browser`, MCP tool `discern_navigate`, and `DISCERN_*` environment variables. Judgment transport is now `@jkudish/discern-agent-tools` 1.0.
+- `jev_navigate` stays callable as an unlisted alias. `DISCERN_TOOL_NAMES=jev` lists `jev_navigate` instead, with `discern_navigate` still callable; any value other than `discern` or `jev` refuses to start.
+- Every `JEV_<X>` variable aliases `DISCERN_<X>`, including `JEV_PASSWORD_*` and `JEV_COOKIE_*` names given to `password_env` and `cookie_env`. Each legacy variable prints one deprecation line to stderr, never stdout. `DISCERN_<X>` wins; two different non-empty values are a configuration error that names both variables and never their values. The Chromium postinstall honors both `DISCERN_BROWSER_SKIP_BROWSER_DOWNLOAD` and `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD`.
+- Results add `judgment_provider` and `usage.judgment_calls`. `jev_provider` and `usage.jev_calls` stay with identical values, deprecated.
+- Library: `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, `DiscernAnswer`, `DiscernUsage`, and `NavigateResult` are exported; the `Jev*` names stay as deprecated aliases. `navigate()` now returns `Promise<NavigateResult>` instead of `Promise<any>`; undeclared fields are still typed `any`.
+- The handoff directory default is `~/.discern-browser/handoff`. An existing `~/.jev-browser/handoff` is still used when the new one does not exist.
+- Elements are stamped `data-discern-id` instead of `data-jev-id` in visited pages.
+- OpenAI Decisions judgments with `DISCERN_PROVIDER=openai`, keyed by `DISCERN_OPENAI_API_KEY` (or `OPENAI_API_KEY`, which also drives typing). Never auto-detected; `jev-latest` maps to `gpt-6-luna`. The 0.85 stop thresholds were tuned on Jev and are unverified on it. Cost estimates use the answering carrier's input price.
+- New compatibility package `@jkudish/jev-browser` 1.0.0 (in `compat/jev-browser/`): its `jev-browser` binary runs discern-browser in the same mode and lists `jev_navigate` unless `DISCERN_TOOL_NAMES` is set, and it re-exports the library.
 
 ## 0.8.4
 

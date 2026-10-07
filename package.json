@@ -1,16 +1,16 @@
 {
-  "name": "@jkudish/jev-browser",
-  "version": "0.8.4",
-  "description": "A Jev-driven browser agent: give it a task and a start URL; typed Choice actions, stop/stuck safety gates, the final page, an auditable step trace, and a screenshot. MCP server, CLI, or library.",
+  "name": "@jkudish/discern-browser",
+  "version": "1.0.0",
+  "description": "A browser agent driven by structured model judgments (TypeSafe Jev or OpenAI Decisions): give it a task and a start URL; typed Choice actions, stop/stuck safety gates, the final page, an auditable step trace, and a screenshot. MCP server, CLI, or library.",
   "type": "module",
   "license": "MIT",
   "author": "Joey Kudish",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jkudish/jev-browser.git"
+    "url": "git+https://github.com/jkudish/discern-browser.git"
   },
   "bin": {
-    "jev-browser": "dist/index.js"
+    "discern-browser": "dist/index.js"
   },
   "main": "./dist/library.js",
   "types": "./dist/library.d.ts",
@@ -22,7 +22,8 @@
     "./dist/navigate.js": {
       "types": "./dist/navigate.d.ts",
       "default": "./dist/navigate.js"
-    }
+    },
+    "./bin": "./dist/index.js"
   },
   "files": [
     "dist",
@@ -39,16 +40,18 @@
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
-    "typecheck": "tsc --noEmit",
-    "test": "node --test test/unit.test.mjs test/transports.test.mjs test/http.test.mjs",
+    "typecheck": "tsc --noEmit && tsc -p test/tsconfig.json",
+    "test": "node --test test/unit.test.mjs test/transports.test.mjs test/http.test.mjs test/mcp.test.mjs",
     "test:e2e": "node --test test/e2e.test.mjs",
     "postinstall": "node scripts/ensure-chromium.mjs"
   },
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "discern",
     "typesafe",
     "jev",
+    "openai",
     "browser",
     "agent",
     "playwright",
@@ -59,7 +62,7 @@
     "@ai-sdk/google": "^4.0.88",
     "@ai-sdk/openai": "^4.0.84",
     "@ai-sdk/openai-compatible": "^3.0.63",
-    "@jkudish/jev-agent-tools": "^0.2.0",
+    "@jkudish/discern-agent-tools": "^1.0.0",
     "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/server": "^2.3.1",
     "@typesafe-ai/sdk": "^0.6.0",
