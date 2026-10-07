@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/jev-browser-banner.png" alt="jev-browser — Fast and cheap browser use using TypeSafe's Jev model (banner from before the Discern rename)" />
+  <img src=".github/discern-browser-banner.png" alt="discern-browser — A browser agent driven by typed judgments. Runs on TypeSafe's Jev or OpenAI Decisions." />
 </p>
 
 Fast and very cheap browser use, driven by structured judgments from TypeSafe's Jev model or OpenAI's Decisions API.
