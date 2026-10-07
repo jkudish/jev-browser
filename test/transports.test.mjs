@@ -390,3 +390,14 @@ test("navigate() reads legacy JEV_BROWSER_* names through DISCERN_ and rejects a
     await browser.close();
   }
 });
+
+test("transport failures, including the deadline, are run errors rather than invalid judgments", async () => {
+  for (const status of [429, 503]) {
+    const failing = { name: "fixture", ask: async () => { throw Object.assign(new Error("x"), { status }); } };
+    await assert.rejects(() => askJudgment(failing, input), (error) => !(error instanceof InvalidJudgmentAnswer) && /HTTP/.test(error.message));
+  }
+  const hanging = { name: "fixture", ask: (request) => new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason))) };
+  const { ask } = await import("@jkudish/discern-agent-tools");
+  const result = await ask({ ...input, signal: new AbortController().signal }, { transport: hanging, timeoutMs: 20 });
+  assert.equal(result.code, "timeout");
+});
