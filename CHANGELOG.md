@@ -13,7 +13,7 @@ Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the p
 - The handoff directory default is `~/.discern-browser/handoff`. An existing `~/.jev-browser/handoff` is still used when the new one does not exist.
 - Elements are stamped `data-discern-id` instead of `data-jev-id` in visited pages.
 - OpenAI Decisions judgments with `DISCERN_PROVIDER=openai`, keyed by `DISCERN_OPENAI_API_KEY` (or `OPENAI_API_KEY`, which also drives typing). Never auto-detected; `jev-latest` maps to `gpt-6-luna`. The 0.85 stop thresholds were tuned on Jev and are unverified on it. Cost estimates use the answering carrier's input price.
-- New compatibility package `@jkudish/jev-browser` 1.0.0 (in `compat/jev-browser/`): its `jev-browser` binary runs discern-browser in the same mode and lists `jev_navigate` unless `DISCERN_TOOL_NAMES` is set, and it re-exports the library.
+- New compatibility package `@jkudish/jev-browser` 1.0.0 (in `compat/jev-browser/`): its `jev-browser` binary runs discern-browser in the same mode and lists `jev_navigate` unless `DISCERN_TOOL_NAMES` (or its legacy alias `JEV_TOOL_NAMES`) is set, and it re-exports the library.
 
 ## 0.8.4
 

@@ -556,7 +556,7 @@ How the old names behave in 1.x:
 - `password_env` and `cookie_env` accept either the `JEV_` or the `DISCERN_` name of a variable.
 - `TYPESAFE_API_KEY`, `OPENAI_API_KEY`, and the other provider keys keep their names. `DISCERN_OPENAI_API_KEY` is the judgment key; `OPENAI_API_KEY` still drives typing and is only a judgment fallback with `DISCERN_PROVIDER=openai`.
 
-MCP clients that call `jev_navigate` by name keep working. To keep listing the old name too, set `DISCERN_TOOL_NAMES=jev`; `discern_navigate` then stays callable but unlisted.
+MCP clients that call `jev_navigate` by name keep working. To list the old name instead, set `DISCERN_TOOL_NAMES=jev`; `discern_navigate` then stays callable but unlisted.
 
 `@jkudish/jev-browser` 1.0.0 is a small compatibility package that depends on `@jkudish/discern-browser`. Its `jev-browser` binary runs discern-browser in the mode you called it in (MCP server, `--http`, or `run`) and sets `DISCERN_TOOL_NAMES=jev` unless you set it yourself, so existing `npx -y @jkudish/jev-browser` configurations see no change. It also re-exports the library from `@jkudish/jev-browser` and `@jkudish/jev-browser/dist/navigate.js`.
 

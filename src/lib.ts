@@ -201,7 +201,7 @@ export const PRICE_PER_MTOK_IN = 0.042;
 /** OpenAI Decisions (gpt-6-luna) published pricing: input $0.10 per M tokens, output free. */
 export const OPENAI_DECISIONS_PRICE_PER_MTOK_IN = 0.1;
 
-/** Input price for the carrier that answered; every non-OpenAI carrier serves Jev. */
+/** Input price for the carrier that answered. Non-OpenAI carriers use Jev's price, including Cloudflare's Clef, whose Workers AI billing is separate and unpublished here. */
 export function pricePerMTokIn(provider: string | null): number {
   return provider === "openai" ? OPENAI_DECISIONS_PRICE_PER_MTOK_IN : PRICE_PER_MTOK_IN;
 }
