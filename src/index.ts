@@ -306,9 +306,9 @@ toolRegistrations.push([LEGACY_TOOL_NAME, navigateConfig, navigateHandler] as Pa
 if (process.argv.includes("--http") || process.env.DISCERN_BROWSER_TRANSPORT === "http") {
   const { serveHttp } = await import("./http.js");
   const { url } = await serveHttp(createServer);
-  console.error(`[discern-browser] ready — judgment model ${process.env.DISCERN_BROWSER_MODEL ?? "jev-latest"}, tool ${listedNames === "jev" ? LEGACY_TOOL_NAME : TOOL_NAME}, stateless HTTP at ${url}`);
+  console.error(`[discern-browser] ready — judgment model ${(process.env.DISCERN_BROWSER_MODEL || "latest")}, tool ${listedNames === "jev" ? LEGACY_TOOL_NAME : TOOL_NAME}, stateless HTTP at ${url}`);
 } else {
   const { serveStdio } = await import("@modelcontextprotocol/server/stdio");
   serveStdio(createServer);
-  console.error(`[discern-browser] ready — judgment model ${process.env.DISCERN_BROWSER_MODEL ?? "jev-latest"}, tool ${listedNames === "jev" ? LEGACY_TOOL_NAME : TOOL_NAME}`);
+  console.error(`[discern-browser] ready — judgment model ${(process.env.DISCERN_BROWSER_MODEL || "latest")}, tool ${listedNames === "jev" ? LEGACY_TOOL_NAME : TOOL_NAME}`);
 }

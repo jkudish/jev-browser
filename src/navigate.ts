@@ -592,7 +592,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
   // The model is resolved per run, not at import time, so importing the
   // library has no configuration side effects and env changes apply per call.
-  const requestedModel = env.DISCERN_BROWSER_MODEL ?? "jev-latest";
+  const requestedModel = env.DISCERN_BROWSER_MODEL || "latest";
   const budget: RunBudget = {
     usage: { judgment_calls: 0, jev_calls: 0, input_tokens: 0, output_tokens: 0, est_cost_usd: 0 },
     transport,

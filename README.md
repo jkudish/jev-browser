@@ -466,14 +466,17 @@ With no provider at all, or when the typing model fails or returns empty text, t
 
 ### Providers
 
-Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Four carriers serving TypeSafe's Jev are built in, tried in this order:
+Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Five carriers serving TypeSafe's Jev are built in, tried in this order:
 
 - **TypeSafe** (`TYPESAFE_API_KEY`): direct, and the default when set.
 - **OpenRouter** (`OPENROUTER_API_KEY`): one key can also run the typing model.
 - **Cloudflare Workers AI** (`CLOUDFLARE_API_TOKEN` or `DISCERN_CLOUDFLARE_API_TOKEN`, plus `CLOUDFLARE_ACCOUNT_ID`).
 - **Vercel AI Gateway** (`AI_GATEWAY_API_KEY`).
+- **Any System One-compatible endpoint** (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`, the full POST URL), used only when nothing else is configured.
 
-A fifth carrier, **OpenAI Decisions** (`DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`), runs only with `DISCERN_PROVIDER=openai` and is never auto-detected, because `OPENAI_API_KEY` may already be configured for typing. It maps `jev-latest` to `gpt-6-luna`, which is a different model from Jev: the `goal_done` and `stuck` stop thresholds (0.85) were tuned on Jev and are unverified on it. Cost estimates use its $0.10 per million input tokens.
+Every carrier gets the shared package's retries (408, 409, 429, and 5xx only), 60-second deadline, and response-size ceiling.
+
+A sixth carrier, **OpenAI Decisions** (`DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`), runs only with `DISCERN_PROVIDER=openai` and is never auto-detected, because `OPENAI_API_KEY` may already be configured for typing. It maps the default `latest` to `gpt-6-luna`, which is a different model from Jev: the `goal_done` and `stuck` stop thresholds (0.85) were tuned on Jev and are unverified on it. Cost estimates use its $0.10 per million input tokens.
 
 The Cloudflare carrier also runs Cloudflare's own [Clef decision models](https://blog.cloudflare.com/clef-decision-models/): set `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`. Clef uses Jev's request and answer format, so nothing is translated. `clef-flash` answers a step in a few hundred milliseconds warm, but it is a different model from Jev, so the 0.85 stop thresholds are unverified on it too; cost estimates still use Jev's input price, because Cloudflare bills Workers AI separately.
 
@@ -488,8 +491,8 @@ The built-ins stay limited to major providers. For anything else, library caller
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. `DISCERN_CLOUDFLARE_API_TOKEN` is honored first for separate credentials. |
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway for Jev judgments after the other providers. |
 | `DISCERN_VERCEL_ZERO_DATA_RETENTION` | unset | `1` or `true` requests Vercel AI Gateway zero-data-retention routing for Jev judgments; use with `DISCERN_PROVIDER=vercel`. See [Vercel](#vercel). |
-| `DISCERN_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, or `openai` for judgment calls instead of auto-detection; `openai` is only ever selected this way. Judgment transport only; typing is configured separately with `DISCERN_BROWSER_TYPE_*`. |
-| `DISCERN_BROWSER_MODEL` | `jev-latest` | Judgment model. Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter. With `DISCERN_PROVIDER=openai`, `jev-latest` maps to `gpt-6-luna`; with `DISCERN_PROVIDER=cloudflare`, `clef` or `clef-flash` selects Cloudflare's Clef. |
+| `DISCERN_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, or `openai` for judgment calls instead of auto-detection; `openai` is only ever selected this way. Judgment transport only; typing is configured separately with `DISCERN_BROWSER_TYPE_*`. |
+| `DISCERN_BROWSER_MODEL` | `latest` | Judgment model. `latest` is each carrier's current default (Jev, or `gpt-6-luna` on OpenAI). Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter; with `DISCERN_PROVIDER=cloudflare`, `clef` or `clef-flash` selects Cloudflare's Clef. |
 | `DISCERN_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `DISCERN_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `DISCERN_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
@@ -512,7 +515,7 @@ With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set (and no other provid
 
 ### OpenRouter
 
-With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typing provider) the typing model run through OpenRouter: one key powers the whole package. The Jev endpoint there is alpha and adds a hop. `jev-latest` uses OpenRouter's moving `~typesafe/jev-latest` alias; pin `typesafe/jev-1.13` when you need reproducible routing. Results report the returned snapshot. Direct TypeSafe remains the recommended default when you have both keys.
+With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typing provider) the typing model run through OpenRouter: one key powers the whole package. The Jev endpoint there is alpha and adds a hop. The default `latest` uses OpenRouter's moving `~typesafe/jev-latest` alias; pin `typesafe/jev-1.13` when you need reproducible routing. Results report the returned snapshot. Direct TypeSafe remains the recommended default when you have both keys.
 
 ## Migrating from jev-browser
 
@@ -530,7 +533,7 @@ With only an `OPENROUTER_API_KEY`, both the Jev judgments and (with no other typ
 | Handoff directory | `~/.jev-browser/handoff` | `~/.discern-browser/handoff` (the old one is used if it exists and the new one does not) |
 | Page attribute | `data-jev-id` | `data-discern-id` |
 
-Every environment variable moves from `JEV_` to `DISCERN_`:
+Every environment variable this package reads moves from `JEV_` to `DISCERN_` (other `JEV_*` variables are ignored):
 
 | 0.x | 1.0 |
 | --- | --- |

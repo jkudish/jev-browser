@@ -1684,3 +1684,16 @@ test("ARIA menu items are actionable and same-length dialog updates count as cha
     server.close();
   }
 });
+
+test("only this package's JEV_ variables alias DISCERN_ ones", async () => {
+  const { discernEnv, BROWSER_ENV_NAMES } = await import("../dist/env.js");
+  assert.ok(BROWSER_ENV_NAMES.includes("PROVIDER") && BROWSER_ENV_NAMES.includes("BROWSER_"));
+  const env = discernEnv({ JEV_BROWSER_HEADED: "1", JEV_PASSWORD_ACME: "pw-unit", JEV_COOKIE_SITE: "c", JEV_TOOL_NAMES: "jev", JEV_OPENROUTER_BASE_URL: "http://x", JEV_HOME: "/h", DISCERN_HOME: "/other" });
+  assert.equal(env.DISCERN_BROWSER_HEADED, "1");
+  assert.equal(env.DISCERN_PASSWORD_ACME, "pw-unit");
+  assert.equal(env.DISCERN_COOKIE_SITE, "c");
+  assert.equal(env.DISCERN_TOOL_NAMES, "jev");
+  assert.equal(env.DISCERN_OPENROUTER_BASE_URL, "http://x");
+  // Unrelated JEV_ variables are neither copied nor a conflict.
+  assert.equal(env.DISCERN_HOME, "/other");
+});
