@@ -2,21 +2,33 @@
 
 ## 1.0.0 (unreleased)
 
-Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the package now runs OpenAI's Decisions API as well as TypeSafe's Jev model. Every 0.x name keeps working through 1.x and is removed in 2.0. See the README's [migration section](README.md#migrating-from-jev-browser).
+Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the package now runs Cloudflare's Clef and OpenAI's Decisions API as well as TypeSafe's Jev. Every 0.x name keeps working through 1.x and is removed in 2.0. See the [migration section](README.md#migrating-from-jev-browser).
 
-- Rate limits, provider outages, configuration errors, and the new judgment deadline are reported as run errors, not as invalid judgment answers.
-- The default judgment model is the neutral `latest` (Jev on Jev carriers, `gpt-6-luna` on OpenAI); `jev-latest` keeps working. Every carrier now gets the shared retries, a 60-second deadline, and a response-size ceiling, and the System One-compatible endpoint (`DISCERN_API_KEY` + `DISCERN_API_BASE_URL`) is available as a carrier.
-- Only this package's documented `JEV_*` variables are aliased (the provider settings, `JEV_BROWSER_*`, `JEV_PASSWORD_*`, `JEV_COOKIE_*`, `JEV_TOOL_NAMES`); other `JEV_*` variables are ignored.
-- Cloudflare Clef: `DISCERN_PROVIDER=cloudflare` with `DISCERN_BROWSER_MODEL=clef` or `clef-flash` runs Cloudflare's Clef decision models, via `@jkudish/discern-agent-tools`.
-- Rename: package `@jkudish/discern-browser`, binary `discern-browser`, MCP `serverInfo.name` `discern-browser`, MCP tool `discern_navigate`, and `DISCERN_*` environment variables. Judgment transport is now `@jkudish/discern-agent-tools` 1.0.
-- `jev_navigate` stays callable as an unlisted alias. `DISCERN_TOOL_NAMES=jev` lists `jev_navigate` instead, with `discern_navigate` still callable; any value other than `discern` or `jev` refuses to start.
-- Every `JEV_<X>` variable aliases `DISCERN_<X>`, including `JEV_PASSWORD_*` and `JEV_COOKIE_*` names given to `password_env` and `cookie_env`. Each legacy variable prints one deprecation line to stderr, never stdout. `DISCERN_<X>` wins; two different non-empty values are a configuration error that names both variables and never their values. The Chromium postinstall honors both `DISCERN_BROWSER_SKIP_BROWSER_DOWNLOAD` and `JEV_BROWSER_SKIP_BROWSER_DOWNLOAD`.
-- Results add `judgment_provider` and `usage.judgment_calls`. `jev_provider` and `usage.jev_calls` stay with identical values, deprecated.
-- Library: `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, `DiscernAnswer`, `DiscernUsage`, and `NavigateResult` are exported; the `Jev*` names stay as deprecated aliases. `navigate()` now returns `Promise<NavigateResult>` instead of `Promise<any>`; undeclared fields are still typed `any`.
+### Rename
+
+- Package `@jkudish/discern-browser`, binary `discern-browser`, MCP `serverInfo.name` `discern-browser`, and MCP tool `discern_navigate`.
+- `jev_navigate` stays callable as an unlisted alias. `DISCERN_TOOL_NAMES=jev` lists `jev_navigate` instead; any value other than `discern` or `jev` refuses to start.
+- Environment variables are `DISCERN_*`. This package's documented `JEV_*` names keep working (the provider settings, `JEV_BROWSER_*`, `JEV_PASSWORD_*`, `JEV_COOKIE_*`, and `JEV_TOOL_NAMES`), each printing one deprecation line to stderr, never stdout. Other `JEV_*` variables are ignored. Two different non-empty values for the same setting are a configuration error that names both variables and never their values. `password_env` and `cookie_env` accept either name, and the Chromium postinstall honors both skip variables.
+- Results add `judgment_provider` and `usage.judgment_calls`. `jev_provider` and `usage.jev_calls` stay, with identical values, deprecated.
 - The handoff directory default is `~/.discern-browser/handoff`. An existing `~/.jev-browser/handoff` is still used when the new one does not exist.
 - Elements are stamped `data-discern-id` instead of `data-jev-id` in visited pages.
-- OpenAI Decisions judgments with `DISCERN_PROVIDER=openai`, keyed by `DISCERN_OPENAI_API_KEY` (or `OPENAI_API_KEY`, which also drives typing). Never auto-detected; `jev-latest` maps to `gpt-6-luna`. The 0.85 stop thresholds were tuned on Jev and are unverified on it. Cost estimates use the answering carrier's input price.
-- New compatibility package `@jkudish/jev-browser` 1.0.0 (in `compat/jev-browser/`): its `jev-browser` binary runs discern-browser in the same mode and lists `jev_navigate` unless `DISCERN_TOOL_NAMES` (or its legacy alias `JEV_TOOL_NAMES`) is set, and it re-exports the library.
+- The compatibility package `@jkudish/jev-browser` 1.0.0 (in `compat/jev-browser/`) runs discern-browser in the mode you called it in, lists `jev_navigate` unless `DISCERN_TOOL_NAMES` or `JEV_TOOL_NAMES` is set, and re-exports the library.
+
+### Providers
+
+- OpenAI Decisions with `DISCERN_PROVIDER=openai`, keyed by `DISCERN_OPENAI_API_KEY` (or `OPENAI_API_KEY`, which also drives typing). Never auto-detected. The 0.85 stop thresholds were tuned on Jev and are unverified on it.
+- Cloudflare's Clef with `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`.
+- The System One-compatible endpoint (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`) is available as a carrier.
+- The default judgment model is the neutral `latest` (Jev on Jev carriers, `gpt-6-luna` on OpenAI); `jev-latest` keeps working.
+- Every carrier gets the shared retries, a 60-second deadline, and a response-size ceiling from `@jkudish/discern-agent-tools` 1.0.
+- Cost estimates use the answering carrier's input price.
+- Rate limits, provider outages, configuration errors, and the deadline are reported as run errors, not as invalid judgment answers.
+
+### Library
+
+- `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, `DiscernAnswer`, `DiscernUsage`, and `NavigateResult` are exported; the `Jev*` names stay as deprecated aliases.
+- `navigate()` returns `Promise<NavigateResult>` instead of `Promise<any>`; undeclared fields are still typed `any`.
+- The bin entry is exported as `./bin`; importing it starts the server or CLI.
 
 ## 0.8.4
 
