@@ -61,16 +61,29 @@ body { width: ${width}px; height: ${height}px; background: ${BG}; color: ${FG}; 
 <div class="panel"><div class="cmd"><span class="p">&gt;</span> ${panel.cmd}</div>${panel.rows.map(([k, v, cls = ""]) => `<div class="row"><span>${k}</span><span class="${cls}">${v}</span></div>`).join("")}</div></div>
 <div class="foot">Runs on TypeSafe's Jev or OpenAI Decisions · A third-party tool by Joey Kudish</div></body></html>`;
 
+// Panel values are real outputs, recorded 2026-10-07 on TypeSafe (jev-1.13.0):
+// - discern-mcp: discern_verify, claim "The full test suite passes.", evidence
+//   "npm test / ✔ 306 tests passed / ℹ fail 0" -> verified, supports 1.00,
+//   confidence 1.00, action auto.
+// - discern-browser: discern_navigate from https://en.wikipedia.org/wiki/Coffee,
+//   task "Open the Wikipedia article for Espresso, then open its section about the
+//   history of espresso, and stop there." -> click_e28 1.00, click_e6 0.46,
+//   click_e7 0.77, done 0.71, status done.
+// - discern-agent-tools: ask() noul "Is a refund requested?" on "A customer asks
+//   for a refund of a duplicate charge." -> ok, typesafe, jev-1.13.0, noul 0.99.
 const mcp = { name: "discern-mcp", nameSize: 80, tagline: "Typed judgments with calibrated probabilities, as MCP tools.",
-  panel: { cmd: "discern_verify", rows: [["verdict", "verified", "ok"], ["probability", "0.94"], ["confidence", "0.91"], ["action", "auto"]] } };
+  panel: { cmd: "discern_verify", rows: [["verdict", "verified", "ok"], ["probability", "1.00"], ["confidence", "1.00"], ["action", "auto"]] } };
 const browser = { name: "discern-browser", nameSize: 60, tagline: "A browser agent driven by typed judgments.",
-  panel: { cmd: "discern_navigate", rows: [["1 click_e8", "0.99"], ["2 type_e4", "0.97"], ["3 click_e21", "0.95"], ["goal_done", "0.98"], ["status", "done", "ok"]] } };
+  panel: { cmd: "discern_navigate", rows: [["1 click_e28", "1.00"], ["2 click_e6", "0.46"], ["3 click_e7", "0.77"], ["4 done", "0.71"], ["status", "done", "ok"]] } };
 
-const assets = [
-  ["discern-mcp-og.png", { width: 1280, height: 640, ...mcp }],
-  ["discern-browser-og.png", { width: 1280, height: 640, ...browser }],
-  ["discern-browser-banner.png", { width: 1270, height: 760, ...browser }],
-];
+const agentTools = { name: "discern-agent-tools", nameSize: 52, tagline: "One validated ask() across judgment providers.",
+  panel: { cmd: "ask(input)", rows: [["ok", "true", "ok"], ["provider", "typesafe"], ["model", "jev-1.13.0"], ["noul", "0.99"]] } };
+
+// Every repository gets a README banner and a GitHub social card.
+const assets = [mcp, browser, agentTools].flatMap((spec) => [
+  [`${spec.name}-banner.png`, { width: 1270, height: 760, ...spec }],
+  [`${spec.name}-og.png`, { width: 1280, height: 640, ...spec }],
+]);
 
 await mkdir(out, { recursive: true });
 await writeFile(join(out, "discern-mark.svg"), markSvg());
