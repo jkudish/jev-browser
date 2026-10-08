@@ -1,10 +1,10 @@
-// The Jev question catalog — every question in one place, with the pattern it
+// The judgment question catalog — every question in one place, with the pattern it
 // follows. Changing a question here changes every consumer; link the relevant
 // TypeSafe doc when you change a design.
 import { choice, noul } from "@typesafe-ai/sdk";
 
 /**
- * The primary Jev call for each step: three independent judgments over the
+ * The primary judgment call for each step: three independent judgments over the
  * same state. A select action adds one second-stage call for its option (see
  * selectOptionQuestion), so "one call per step" means one primary call.
  * Patterns: fan-out (docs.typesafe.ai/patterns/fan-out.md) — the questions
@@ -27,7 +27,7 @@ export function stepQuestions(criteria: Record<string, string>) {
 
 /**
  * Second stage for native <select> elements, asked only when the step Choice
- * picked select_eN. Option labels are the defined set; Jev picks the value.
+ * picked select_eN. Option labels are the defined set; the model picks the value.
  * Two-stage pattern: docs.typesafe.ai (Choice cardinality is bounded at 255).
  */
 export function selectOptionQuestion(elementDescription: string, options: string[]) {

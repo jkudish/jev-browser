@@ -1,18 +1,18 @@
 // Credential delivery for password fill. The value enters through one of
 // three channels (stdin, a validated one-shot handoff file, or a
-// JEV_PASSWORD_* environment variable), lives in memory for a single run,
+// DISCERN_PASSWORD_* environment variable), lives in memory for a single run,
 // and is redacted from every model-facing and serialized output. It must
 // never appear in argv, tool arguments, the task, model context, traces,
 // screenshots, or error messages.
 import { chmod, lstat, mkdir, open, readFile, realpath, unlink } from "node:fs/promises";
-import { constants as FS } from "node:fs";
+import { constants as FS, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 
 /** Naming a variable with this prefix is the operator's opt-in for password_env. */
-export const PASSWORD_ENV_PREFIX = "JEV_PASSWORD_";
+export const PASSWORD_ENV_PREFIX = "DISCERN_PASSWORD_";
 /** Naming a variable with this prefix is the operator's opt-in for cookie_env. */
-export const COOKIE_ENV_PREFIX = "JEV_COOKIE_";
+export const COOKIE_ENV_PREFIX = "DISCERN_COOKIE_";
 export const MAX_SECRET_BYTES = 4096;
 export const MIN_SECRET_CHARS = 4;
 export const PASSWORD_REDACTED = "[REDACTED]";
@@ -42,9 +42,28 @@ export function parseTrustedOrigin(raw: string): string | null {
   return url.origin;
 }
 
-/** The handoff directory for password files. Override for tests and containers. */
+let warnedLegacyHandoff = false;
+
+/**
+ * The handoff directory for password files. Override for tests and containers.
+ * The default is ~/.discern-browser/handoff; through 1.x an existing
+ * ~/.jev-browser/handoff is still used when the new directory does not exist
+ * (with one stderr deprecation line), so secret-manager scripts written for
+ * jev-browser keep working. ensureHandoffDir validates whichever is chosen.
+ */
 export function handoffDir(): string {
-  return process.env.JEV_BROWSER_HANDOFF_DIR || resolve(homedir(), ".jev-browser", "handoff");
+  const configured = process.env.DISCERN_BROWSER_HANDOFF_DIR;
+  if (configured) return configured;
+  const current = resolve(homedir(), ".discern-browser", "handoff");
+  const legacy = resolve(homedir(), ".jev-browser", "handoff");
+  if (!lstatSync(current, { throwIfNoEntry: false }) && lstatSync(legacy, { throwIfNoEntry: false })) {
+    if (!warnedLegacyHandoff) {
+      warnedLegacyHandoff = true;
+      process.stderr.write(`[discern-browser] using the legacy handoff directory ${legacy}; move it to ${current}. The legacy default is removed in 2.0.\n`);
+    }
+    return legacy;
+  }
+  return current;
 }
 
 /** The handoff directory must be a private directory owned by this user. */
@@ -55,7 +74,7 @@ export async function ensureHandoffDir(dir = handoffDir()): Promise<void> {
     if (!st.isDirectory()) throw new Error(`handoff directory ${resolved} is not a directory`);
     if (st.uid !== process.getuid!()) throw new Error(`handoff directory ${resolved} is not owned by this user`);
     if ((st.mode & 0o777) !== 0o700) {
-      throw new Error(`handoff directory ${resolved} must be mode 0700; run chmod 700 on it or point JEV_BROWSER_HANDOFF_DIR elsewhere`);
+      throw new Error(`handoff directory ${resolved} must be mode 0700; run chmod 700 on it or point DISCERN_BROWSER_HANDOFF_DIR elsewhere`);
     }
   } else {
     await mkdir(resolved, { recursive: true, mode: 0o700 });
@@ -123,7 +142,7 @@ export function validateSecretBuffer(buf: Buffer, label = "password"): string {
 export async function readSecretFromStdin(): Promise<Buffer> {
   if (process.stdin.isTTY) {
     throw new Error(
-      "refusing to read a password from an interactive terminal; pipe it instead, e.g. op read --no-newline 'op://...' | jev-browser run ... --password-file -",
+      "refusing to read a password from an interactive terminal; pipe it instead, e.g. op read --no-newline 'op://...' | discern-browser run ... --password-file -",
     );
   }
   const chunks: Buffer[] = [];
@@ -208,19 +227,23 @@ export async function readHandoffSecret(path: string, dir = handoffDir(), what =
 const ENV_NAME_RE = /^[A-Z0-9_]+$/;
 
 /**
- * Resolves a password_env request. Only JEV_PASSWORD_* names are considered;
+ * Resolves a password_env request. Only DISCERN_PASSWORD_* names are considered;
  * every other name is rejected before its value is ever looked up, so the
  * model cannot probe arbitrary environment variables through this path.
- * The prefix and the option name in errors generalize to JEV_COOKIE_* for
- * seed-cookie delivery, with identical posture.
+ * The prefix and the option name in errors generalize to DISCERN_COOKIE_* for
+ * seed-cookie delivery, with identical posture. Through 1.x the legacy
+ * JEV_PASSWORD_* / JEV_COOKIE_* name of the same variable is accepted too; the
+ * value is read from its DISCERN_ name, where startup normalization put it.
  */
 export function readSecretFromEnv(name: string, opts: { prefix?: string; what?: string } = {}): Buffer {
   const prefix = opts.prefix ?? PASSWORD_ENV_PREFIX;
   const what = opts.what ?? "password_env";
-  if (!name.startsWith(prefix) || !ENV_NAME_RE.test(name)) {
+  const legacyPrefix = `JEV_${prefix.slice("DISCERN_".length)}`;
+  const current = name.startsWith(legacyPrefix) ? prefix + name.slice(legacyPrefix.length) : name;
+  if (!current.startsWith(prefix) || !ENV_NAME_RE.test(current)) {
     throw new Error(`${what} must name a ${prefix}* variable; giving a variable that name is the opt-in`);
   }
-  const value = process.env[name];
+  const value = process.env[current];
   if (value === undefined) throw new Error(`${name} is not set in this server's environment`);
   if (value.length === 0) throw new Error(`${name} is empty`);
   return Buffer.from(value, "utf8");

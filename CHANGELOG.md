@@ -1,8 +1,38 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (unreleased)
 
-- OpenAI Decisions judgments (spike) with `JEV_PROVIDER=openai`, via the unreleased `@jkudish/jev-agent-tools` OpenAI transport. Never auto-detected. Cost estimates use the answering carrier's input price.
+Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the package now runs Cloudflare's Clef and OpenAI's Decisions API as well as TypeSafe's Jev. Every 0.x name keeps working through 1.x and is removed in 2.0. See the [migration section](README.md#migrating-from-jev-browser).
+
+### Rename
+
+- Package `@jkudish/discern-browser`, binary `discern-browser`, MCP `serverInfo.name` `discern-browser`, and MCP tool `discern_navigate`.
+- `jev_navigate` stays callable as an unlisted alias. `DISCERN_TOOL_NAMES=jev` lists `jev_navigate` instead; any value other than `discern` or `jev` refuses to start.
+- Environment variables are `DISCERN_*`. This package's documented `JEV_*` names keep working (the provider settings, `JEV_BROWSER_*`, `JEV_PASSWORD_*`, `JEV_COOKIE_*`, and `JEV_TOOL_NAMES`), each printing one deprecation line to stderr, never stdout. Other `JEV_*` variables are ignored. Two different non-empty values for the same setting are a configuration error that names both variables and never their values. `password_env` and `cookie_env` accept either name, and the Chromium postinstall honors both skip variables.
+- Results add `judgment_provider` and `usage.judgment_calls`. `jev_provider` and `usage.jev_calls` stay, with identical values, deprecated.
+- The handoff directory default is `~/.discern-browser/handoff`. An existing `~/.jev-browser/handoff` is still used when the new one does not exist.
+- Elements are stamped `data-discern-id` instead of `data-jev-id` in visited pages.
+- The compatibility package `@jkudish/jev-browser` 1.0.0 (in `compat/jev-browser/`) runs discern-browser in the mode you called it in, lists `jev_navigate` unless `DISCERN_TOOL_NAMES` or `JEV_TOOL_NAMES` is set, and re-exports the library.
+
+### Providers
+
+- OpenAI Decisions with `DISCERN_PROVIDER=openai`, keyed by `DISCERN_OPENAI_API_KEY` (or `OPENAI_API_KEY`, which also drives typing). Never auto-detected. The 0.85 stop thresholds were tuned on Jev and are unverified on it.
+- Cloudflare's Clef with `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`.
+- The System One-compatible endpoint (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`) is available as a carrier.
+- The default judgment model is the neutral `latest` (Jev on Jev carriers, `gpt-6-luna` on OpenAI); `jev-latest` keeps working.
+- Every carrier gets the shared retries, a 60-second deadline, and a response-size ceiling from `@jkudish/discern-agent-tools` 1.0.
+- Cost estimates use the answering carrier's input price.
+- Rate limits, provider outages, configuration errors, and the deadline are reported as run errors, not as invalid judgment answers.
+
+### Library
+
+- `DiscernTransport`, `DiscernTransportInput`, `DiscernTransportReply`, `DiscernAnswer`, `DiscernUsage`, and `NavigateResult` are exported; the `Jev*` names stay as deprecated aliases.
+- `navigate()` returns `Promise<NavigateResult>` instead of `Promise<any>`; undeclared fields are still typed `any`.
+- The bin entry is exported as `./bin`; importing it starts the server or CLI.
+
+## 0.8.5
+
+- Updated Playwright to 1.64.0 and AI SDK to 7.0.133 with typing-provider patches.
 
 ## 0.8.4
 

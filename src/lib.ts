@@ -1,11 +1,11 @@
 // Pure helpers — no browser, no API, fully unit-testable.
 
-/** Max elements offered to Jev per step. TypeSafe Choice supports up to 255 options. */
+/** Max elements offered to the judgment model per step. TypeSafe Choice supports up to 255 options. */
 export const MAX_ELEMENTS = 240;
 
 /** Raw interactive candidate as extracted from the page (already stamped with an attr). */
 export interface RawElement {
-  attr: string; // data-jev-id attribute value stamped in the page
+  attr: string; // data-discern-id attribute value stamped in the page
   tag: string;
   role: string;
   text: string;
@@ -149,7 +149,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
   return { elements, truncated: elements.length >= MAX_ELEMENTS };
 }
 
-/** Jev Choice criteria for one step: element actions plus loop controls. */
+/** Choice criteria for one step: element actions plus loop controls. */
 export function buildCriteria(elements: PageElement[]): Record<string, string> {
   const criteria: Record<string, string> = {};
   for (const el of elements) {
@@ -163,7 +163,7 @@ export function buildCriteria(elements: PageElement[]): Record<string, string> {
 }
 
 export function selectorFor(el: PageElement): string {
-  return `[data-jev-id="${el.attr}"]`;
+  return `[data-discern-id="${el.attr}"]`;
 }
 
 /** Next-best action from a Choice distribution, excluding known-bad options. */
@@ -201,7 +201,7 @@ export const PRICE_PER_MTOK_IN = 0.042;
 /** OpenAI Decisions (gpt-6-luna) published pricing: input $0.10 per M tokens, output free. */
 export const OPENAI_DECISIONS_PRICE_PER_MTOK_IN = 0.1;
 
-/** Input price for the carrier that answered; every non-OpenAI carrier serves Jev. */
+/** Input price for the carrier that answered. Non-OpenAI carriers use Jev's price, including Cloudflare's Clef, whose Workers AI billing is separate and unpublished here. */
 export function pricePerMTokIn(provider: string | null): number {
   return provider === "openai" ? OPENAI_DECISIONS_PRICE_PER_MTOK_IN : PRICE_PER_MTOK_IN;
 }
@@ -268,7 +268,7 @@ export const TYPING_CANDIDATES: TypingCandidateSpec[] = [
 export interface TypingSelection {
   provider: "openai" | "openrouter" | "anthropic" | "google" | "compatible-endpoint";
   modelId: string;
-  /** JEV_BROWSER_TYPE_BASE_URL: a custom OpenAI-compatible endpoint on its own, or the endpoint of the explicitly selected provider. */
+  /** DISCERN_BROWSER_TYPE_BASE_URL: a custom OpenAI-compatible endpoint on its own, or the endpoint of the explicitly selected provider. */
   baseUrl?: string;
 }
 
@@ -283,29 +283,29 @@ function envKey(env: NodeJS.ProcessEnv, names: string[]): string {
 /**
  * Resolve the typing generator configuration from an env record. Pure.
  *
- * - JEV_BROWSER_TYPE_PROVIDER, when set, selects ONLY that provider: an
+ * - DISCERN_BROWSER_TYPE_PROVIDER, when set, selects ONLY that provider: an
  *   unknown value, or a missing or malformed key for it, throws, because the
  *   run must fail up front instead of silently using another provider.
- * - JEV_BROWSER_TYPE_BASE_URL selects a custom OpenAI-compatible endpoint on
+ * - DISCERN_BROWSER_TYPE_BASE_URL selects a custom OpenAI-compatible endpoint on
  *   its own, or becomes the endpoint of the explicitly selected provider.
  * - With neither set, auto-detection picks the first candidate whose key is
  *   present and shape-valid, in TYPING_CANDIDATES order.
  * - Returns null when nothing is configured.
  */
 export function resolveTypingSelection(env: NodeJS.ProcessEnv): TypingSelection | null {
-  const modelEnv = env.JEV_BROWSER_TYPE_MODEL?.trim() || undefined;
-  const baseUrl = env.JEV_BROWSER_TYPE_BASE_URL?.trim() || undefined;
-  const providerEnv = env.JEV_BROWSER_TYPE_PROVIDER?.trim().toLowerCase() || undefined;
+  const modelEnv = env.DISCERN_BROWSER_TYPE_MODEL?.trim() || undefined;
+  const baseUrl = env.DISCERN_BROWSER_TYPE_BASE_URL?.trim() || undefined;
+  const providerEnv = env.DISCERN_BROWSER_TYPE_PROVIDER?.trim().toLowerCase() || undefined;
 
   if (baseUrl) {
     let parsed: URL;
     try {
       parsed = new URL(baseUrl);
     } catch {
-      throw new Error("JEV_BROWSER_TYPE_BASE_URL must be a valid absolute http(s) URL, e.g. http://localhost:11434/v1");
+      throw new Error("DISCERN_BROWSER_TYPE_BASE_URL must be a valid absolute http(s) URL, e.g. http://localhost:11434/v1");
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("JEV_BROWSER_TYPE_BASE_URL must be an http(s) URL");
+      throw new Error("DISCERN_BROWSER_TYPE_BASE_URL must be an http(s) URL");
     }
   }
 
@@ -313,13 +313,13 @@ export function resolveTypingSelection(env: NodeJS.ProcessEnv): TypingSelection 
     const candidate = TYPING_CANDIDATES.find((c) => c.provider === providerEnv);
     if (!candidate) {
       throw new Error(
-        `JEV_BROWSER_TYPE_PROVIDER "${providerEnv}" is not a known typing provider; expected one of ${TYPING_CANDIDATES.map((c) => c.provider).join(", ")}`,
+        `DISCERN_BROWSER_TYPE_PROVIDER "${providerEnv}" is not a known typing provider; expected one of ${TYPING_CANDIDATES.map((c) => c.provider).join(", ")}`,
       );
     }
     const key = envKey(env, candidate.keyEnv);
     if (key.length <= 20 || !candidate.keyPattern.test(key)) {
       throw new Error(
-        `JEV_BROWSER_TYPE_PROVIDER=${candidate.provider} requires ${candidate.keyEnv.join(" or ")} to be set to a valid key (${candidate.keyLabel}); no other typing provider will be tried`,
+        `DISCERN_BROWSER_TYPE_PROVIDER=${candidate.provider} requires ${candidate.keyEnv.join(" or ")} to be set to a valid key (${candidate.keyLabel}); no other typing provider will be tried`,
       );
     }
     return { provider: candidate.provider, modelId: modelEnv ?? candidate.defaultModel, baseUrl };
