@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.5
+
+- Updated Playwright to 1.64.0 and AI SDK to 7.0.133 with typing-provider patches.
+
 ## 0.8.4
 
 - The browser can act on ARIA menu items, options, tabs, switches, and radios. Same-text controls show their role, and visible dialog updates count as page changes. Reimplemented from ideas in [#22](https://github.com/jkudish/jev-browser/pull/22) by [@yaukitdev1-cpu](https://github.com/yaukitdev1-cpu).
