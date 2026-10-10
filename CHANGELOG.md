@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Improved disclosure menus, custom radio and checkbox controls, and toggle/sort state visibility. Control-state changes count as progress without exposing field values. Thanks to [@dodgy8452](https://github.com/dodgy8452) for the reproductions in #26, #27 and #28.
+- Updated AI SDK and typing-provider dependencies.
+
 ## 0.8.5
 
 - Updated Playwright to 1.64.0 and AI SDK to 7.0.133 with typing-provider patches.

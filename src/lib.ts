@@ -19,6 +19,7 @@ export interface RawElement {
   submitControl?: boolean; // button[type=submit], input[type=submit], or a type-less <button> inside a form
   enterSubmittable?: boolean; // single-line text field: Enter submits its form (or runs the site's handler)
   options?: SelectOption[]; // options for selects, with their DOM index
+  state?: string[]; // closed-vocabulary control state, never field values
 }
 
 /** One native <select> option: its DOM index and (scrubbed) label. */
@@ -115,6 +116,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
     const label = el.text.slice(0, 60);
     const hrefTail = el.href ? ` -> ${el.href.replace(/^https?:\/\//, "").slice(0, 70)}` : "";
     const control = el.role || el.tag;
+    const stateTail = el.state?.length ? ` (${el.state.join(", ")})` : "";
     elements.push({
       id,
       attr: el.attr,
@@ -129,7 +131,7 @@ export function buildActionSpace(raw: RawElement[], opts: BuildActionSpaceOption
               ? `${control} "${label}" (type without submitting)`
               : kind === "select"
                 ? `${control} "${label}" (dropdown; a follow-up picks the option)`
-                : `${control} "${label}"${hrefTail}`,
+                : `${control} "${label}"${stateTail}${hrefTail}`,
       options: kind === "select" ? (el.options ?? []) : undefined,
     });
     // Non-search single-line text fields additionally offer submit (press
@@ -618,4 +620,3 @@ export function parseCookieSpec(spec: string): SeedCookie {
   if (eq <= 0) throw new Error("cookie expects name=value");
   return { name: spec.slice(0, eq), value: spec.slice(eq + 1) };
 }
-

@@ -275,19 +275,61 @@ async function extractAndStamp(
       // selectors match more than one element.
       document.querySelectorAll("[data-jev-id]").forEach((el) => el.removeAttribute("data-jev-id"));
       const SEL =
-        'a[href], button, input, textarea, select, [role="button"], [role="link"], [role="searchbox"], [role="textbox"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="tab"], [role="switch"], [role="radio"]';
+        'a[href], button, details > summary, input, textarea, select, [role="button"], [role="link"], [role="searchbox"], [role="textbox"], [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="tab"], [role="switch"], [role="radio"], [role="checkbox"]';
       const out: any[] = [];
       for (const el of document.querySelectorAll(SEL) as NodeListOf<HTMLElement>) {
         // Cap accepted candidates AFTER filtering so hidden boilerplate at the
         // top of the DOM cannot crowd out usable controls below it.
         if (out.length >= 2000) break;
-        const rects = el.getClientRects();
-        if (!rects.length) continue;
+        let target = el;
         const style = getComputedStyle(el);
-        if (style.display === "none" || style.visibility === "hidden") continue;
         const tag = el.tagName.toLowerCase();
         const roleAttr = el.getAttribute("role") || "";
         const typeAttr = (el.getAttribute("type") || "").toLowerCase();
+        if (tag === "input" && ["checkbox", "radio"].includes(typeAttr)) {
+          const rect = el.getBoundingClientRect();
+          if (!el.getClientRects().length || style.display === "none" || style.visibility === "hidden" ||
+              rect.width < 2 || rect.height < 2 || style.clipPath !== "none" || style.clip !== "auto") {
+            const proxy = Array.from((el as HTMLInputElement).labels ?? []).find(label => {
+              const box = label.getBoundingClientRect();
+              const css = getComputedStyle(label);
+              return box.width >= 2 && box.height >= 2 && css.display !== "none" && css.visibility !== "hidden" &&
+                css.clipPath === "none" && css.clip === "auto";
+            });
+            if (!proxy) continue;
+            target = proxy;
+          }
+        } else if (!el.getClientRects().length || style.display === "none" || style.visibility === "hidden") continue;
+        // Closed disclosures can still give descendants layout rectangles.
+        // Only the first summary subtree is rendered and actionable.
+        let hiddenDisclosure = false;
+        for (let ancestor = target.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          if (ancestor instanceof HTMLDetailsElement && !ancestor.open &&
+              !ancestor.querySelector(":scope > summary")?.contains(target)) hiddenDisclosure = true;
+        }
+        if (hiddenDisclosure) continue;
+        const state: string[] = [];
+        if (tag === "input" && ["checkbox", "radio"].includes(typeAttr)) {
+          const input = el as HTMLInputElement;
+          state.push(input.indeterminate ? "mixed" : input.checked ? "checked" : "unchecked");
+        } else {
+          const checked = el.getAttribute("aria-checked");
+          if (["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio", "option"].includes(roleAttr)) {
+            if (checked === "true") state.push("checked");
+            if (checked === "false") state.push("unchecked");
+            if (checked === "mixed") state.push("mixed");
+          }
+        }
+        for (const [attribute, yes, no] of [["aria-pressed", "pressed", "not pressed"], ["aria-expanded", "expanded", "collapsed"], ["aria-selected", "selected", "not selected"]]) {
+          const value = el.getAttribute(attribute);
+          if (value === "true") state.push(yes);
+          if (value === "false") state.push(no);
+          if (attribute === "aria-pressed" && value === "mixed") state.push("mixed");
+        }
+        if (tag === "summary") state.push((el.parentElement as HTMLDetailsElement).open ? "expanded" : "collapsed");
+        const sort = el.closest('th[aria-sort], [role="columnheader"][aria-sort], [role="rowheader"][aria-sort]')?.getAttribute("aria-sort");
+        if (sort === "ascending" || sort === "descending") state.push(`sorted ${sort}`);
+        if (sort === "other") state.push("sorted");
         // Accessible-name resolution for form controls (AccName 1.2 §4.3.2):
         // aria-labelledby refs first, then aria-label, then the control's
         // associated native labels (label[for] and wrapping labels, all of
@@ -343,8 +385,8 @@ async function extractAndStamp(
         );
         const href = tag === "a" ? (el.getAttribute("href") || "").slice(0, cap.href) : "";
         const clickable =
-          ["a", "button"].includes(tag) ||
-          ["button", "link", "menuitem", "menuitemradio", "menuitemcheckbox", "option", "tab", "switch", "radio"].includes(roleAttr) ||
+          ["a", "button", "summary"].includes(tag) ||
+          ["button", "link", "menuitem", "menuitemradio", "menuitemcheckbox", "option", "tab", "switch", "radio", "checkbox"].includes(roleAttr) ||
           ["submit", "button", "checkbox", "radio"].includes(typeAttr);
 
         const selectable = tag === "select";
@@ -365,7 +407,7 @@ async function extractAndStamp(
         const enterSubmittable = typeable && tag !== "textarea";
         if (!clickable && !typeable && !selectable && !(passwordInput && includePw)) continue;
         const attr = `j${out.length + 1}`;
-        el.setAttribute("data-jev-id", attr);
+        target.setAttribute("data-jev-id", attr);
         const options =
           tag === "select"
             ? Array.from((el as unknown as HTMLSelectElement).options)
@@ -376,7 +418,7 @@ async function extractAndStamp(
                 .filter((o) => o.label.length > 0)
                 .slice(0, 200)
             : undefined;
-        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, searchField, submitControl, enterSubmittable, selectable, passwordInput: passwordInput || undefined, options });
+        out.push({ attr, tag, role: roleAttr || tag, text: label.slice(0, cap.label), href, typeAttr, clickable, typeable, searchField, submitControl, enterSubmittable, selectable, passwordInput: passwordInput || undefined, options, state });
       }
       return out;
     },
@@ -869,6 +911,23 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       let detail = chosen;
       let actionError: string | undefined;
       let typedIntoLabel: string | null = null;
+      const stateTarget = element?.kind === "click" && raw.find(e => e.attr === element.attr)?.state?.length
+        ? await page.$(selectorFor(element)) : null;
+      const readState = (target: Element) => {
+        const el = target instanceof HTMLLabelElement ? target.control ?? target : target;
+        const token = (value: string | null, allowed: string[]) => allowed.includes(value ?? "") ? value : null;
+        return JSON.stringify([
+          el instanceof HTMLInputElement ? [el.checked, el.indeterminate] : null,
+          token(el.getAttribute("aria-checked"), ["true", "false", "mixed"]),
+          token(el.getAttribute("aria-pressed"), ["true", "false", "mixed"]),
+          token(el.getAttribute("aria-expanded"), ["true", "false"]),
+          token(el.getAttribute("aria-selected"), ["true", "false"]),
+          el.tagName === "SUMMARY" ? (el.parentElement as HTMLDetailsElement).open : null,
+          token(el.closest('th[aria-sort], [role="columnheader"][aria-sort], [role="rowheader"][aria-sort]')?.getAttribute("aria-sort") ?? null,
+            ["ascending", "descending", "other", "none"]),
+        ]);
+      };
+      const beforeState = stateTarget ? await stateTarget.evaluate(readState).catch(() => null) : null;
       try {
         if (chosen === "back") {
           const wentBack = await page.goBack({ waitUntil: "domcontentloaded", timeout: bounded(10_000) }).catch(() => null);
@@ -1025,10 +1084,14 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
 
       const after = await pageObservables(page, bounded, excerptCap);
+      const afterState = stateTarget ? await stateTarget.evaluate(readState).catch(() => null) : null;
+      await stateTarget?.dispose();
+      const controlChanged = !actionError && beforeState !== null && afterState !== null && beforeState !== afterState;
       // Execution failures are attributed to the action, not to ambient page
       // changes that happened to occur in the same window.
       const pageUnchanged =
         !actionError &&
+        !controlChanged &&
         after.url === observables.url &&
         after.title === observables.title &&
         (typedIntoLabel !== null || after.visibleExcerpt === observables.visibleExcerpt) &&
@@ -1050,7 +1113,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
                     // field now holds text. Say so, or the stuck watcher
                     // misreads a successful type as a no-op.
                     `typed into "${typedIntoLabel}"; no visible page change`
-                  : "no visible change";
+                  : controlChanged ? "control state changed" : "no visible change";
       lastRedundant = pageUnchanged ? (typedIntoLabel !== null ? "typed" : "no_change") : null;
 
       lastExecuted = chosen;

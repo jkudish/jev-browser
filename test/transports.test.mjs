@@ -290,3 +290,57 @@ test("injected transport drives both call sites and malformed second-stage answe
     assert.equal(await page.locator("select").inputValue(), "a");
   } finally { await browser.close(); }
 });
+
+test("disclosures and custom toggles expose state and execute one native action", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    for (const fixture of [
+      { html: '<details><summary>More</summary><a href="/export">Export CSV</a></details>', label: 'More', before: 'collapsed', after: 'expanded', check: async () => assert.equal(await page.locator('details').evaluate(el => el.open), true) },
+      { html: '<style>.sr{position:absolute;width:1px;height:1px;margin:-1px;clip-path:inset(50%)}label{display:inline-block;padding:12px}</style><input type="radio" id="tab" class="sr"><label for="tab">By Technician</label>', label: 'By Technician', before: 'unchecked', after: 'checked', check: async () => assert.equal(await page.locator('#tab').isChecked(), true) },
+      { html: '<input type="checkbox" id="updates" style="display:none"><label for="updates">Updates</label>', label: 'Updates', before: 'unchecked', after: 'checked', check: async () => assert.equal(await page.locator('#updates').isChecked(), true) },
+      { html: '<label><input type="checkbox" checked>Visible checkbox</label>', label: 'Visible checkbox', before: 'checked', after: 'unchecked', check: async () => assert.equal(await page.locator('input').isChecked(), false) },
+      { html: '<table><tr><th aria-sort="ascending"><button onclick="this.parentElement.setAttribute(\'aria-sort\',\'descending\')">Name</button></th></tr></table>', label: 'Name', before: 'sorted ascending', after: 'sorted descending', check: async () => assert.equal(await page.locator('th').getAttribute('aria-sort'), 'descending') },
+    ]) {
+      await page.setContent(fixture.html);
+      const states = [];
+      const result = await navigate({ task: `Change ${fixture.label}`, page, allowTyping: false, maxSteps: 2, screenshot: 'none', transport: {
+        name: 'fixture', async ask(request) {
+          states.push(request.state);
+          const chosen = request.state.interactive_elements.find(el => el.description.includes(`"${fixture.label}"`));
+          assert.ok(chosen);
+          assert.ok(chosen.description.includes(states.length === 1 ? fixture.before : fixture.after));
+          const choice = states.length === 1 ? `click_${chosen.id}` : 'done';
+          return { answers: { action: { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(request.questions.action.criteria).map(key => [key, key === choice ? 1 : 0])) }, goal_done: { type: 'noul', noul: 0 }, stuck: { type: 'noul', noul: 0 } }, usage, model: 'fixture' };
+        },
+      }});
+      assert.equal(result.steps[0].action_error, undefined);
+      assert.notEqual(result.steps[0].outcome, 'no visible change');
+      assert.equal(states.length, 2);
+      await fixture.check();
+      if (fixture.label === 'More') {
+        assert.equal(states[0].interactive_elements.length, 1);
+        assert.ok(states[1].interactive_elements.some(el => el.description.includes('Export CSV')));
+      }
+    }
+  } finally { await browser.close(); }
+});
+
+test("control observations use bounded state tokens, never field values or arbitrary ARIA strings", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<button aria-pressed="true" aria-expanded="false">Toggle</button><button role="tab" aria-selected="true">Tab</button><button role="checkbox" aria-checked="mixed">Mixed</button><button aria-pressed="private-aria-token">Unknown</button><label>Account<input value="private-field-token"></label><input type="password" value="private-password-token"><table><tr><th aria-sort="private-sort-token"><button>Bad sort</button></th></tr></table>');
+    let observed;
+    await navigate({ task: 'Inspect controls', page, maxSteps: 1, screenshot: 'none', allowTyping: false, transport: {
+      name: 'fixture', async ask(request) {
+        observed = request.state.interactive_elements;
+        return { answers: { action: { type: 'choice', choice: 'done', probabilities: Object.fromEntries(Object.keys(request.questions.action.criteria).map(key => [key, key === 'done' ? 1 : 0])) }, goal_done: { type: 'noul', noul: 0 }, stuck: { type: 'noul', noul: 0 } }, usage, model: 'fixture' };
+      },
+    }});
+    assert.ok(observed.some(el => el.description.includes('pressed, collapsed')));
+    assert.ok(observed.some(el => el.description.includes('(selected)')));
+    assert.ok(observed.some(el => el.description.includes('(mixed)')));
+    assert.equal(JSON.stringify(observed).includes('private-'), false);
+  } finally { await browser.close(); }
+});

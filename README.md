@@ -416,6 +416,11 @@ Each step makes one primary Jev call with three questions over the same state: a
 
 Three of those actions move text or forms, and the boundaries are deliberate. Search boxes, identified structurally as `input[type=search]` or `role=searchbox` and nothing else, get a single `search_eN` action that types the query and runs the search in one step. Submit controls (`button[type=submit]`, `input[type=submit]`, and a `button` with no type attribute inside a form) are offered as `submit_eN` instead of `click_eN`. Every other single-line text field offers two actions: `type_eN`, which types without submitting, and `submit_eN`, which presses Enter on that field to submit. So filling one field of a multi-field form never submits it under the agent's feet, and a field that only looks like a search box (a plain text input in a div with a JavaScript Enter handler) never gets the one-action search.
 
+- Disclosure menus offer their `<summary>` as a click action with expanded/collapsed state.
+- Clipped or hidden native radios and checkboxes use an associated visible label as their click target, chosen before judgment. No force-click or label retry follows a failed action.
+- Control descriptions include checked, mixed, pressed, expanded, selected and header sort state when present. Field values and arbitrary ARIA attribute strings are not added to descriptions.
+- A successful control-state change counts as progress even when the page's text and URL stay the same.
+
 Stop conditions, in code, checked before executing the step's proposed action: the agent chooses `done`, goal probability > 0.85, stuck probability > 0.85, the step budget, or the time budget. A repeated action with no effect switches to the next-best option from the Choice distribution. There is deliberately no low-confidence override: split probability across several similar elements is usually several acceptable alternatives, not uncertainty.
 
 Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired), `stuck`, `max_steps`, `timeout`, `error`, and `blocked` (a bot-protection interstitial stopped the run; see "What you get back"). `done` and `goal_achieved` are two independent judgments; agreement between them is what a trustworthy finish looks like, and the trace shows both at every step.

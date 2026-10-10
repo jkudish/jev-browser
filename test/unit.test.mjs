@@ -1640,7 +1640,7 @@ test("ARIA menu items are actionable and same-length dialog updates count as cha
     const browserPage = await browser.newPage();
     await browserPage.goto(`http://127.0.0.1:${server.address().port}/`);
     const result = await navigate({ task: "add an adult", page: browserPage, transport, maxSteps: 1, screenshot: "none" });
-    assert.ok(Object.values(criteria[0]).includes('menuitemradio "Duration"'), "the ARIA sort item is in the action space");
+    assert.ok(Object.values(criteria[0]).includes('menuitemradio "Duration" (unchecked)'), "the ARIA sort item and its state are in the action space");
     assert.ok(Object.values(criteria[0]).includes('button "Duration"'), "the same-text filter remains distinct");
     assert.equal(result.steps[0].outcome, "page content changed");
     assert.equal(await browserPage.locator("#count").textContent(), "Adults 2");
