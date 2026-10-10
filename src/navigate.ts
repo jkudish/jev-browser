@@ -296,8 +296,10 @@ async function extractAndStamp(
               return box.width >= 2 && box.height >= 2 && css.display !== "none" && css.visibility !== "hidden" &&
                 css.clipPath === "none" && css.clip === "auto";
             });
-            if (!proxy) continue;
-            target = proxy;
+            // Partial clipping can still leave a usable native control.
+            // Preserve that target when no associated label is available.
+            if (proxy) target = proxy;
+            else if (!el.getClientRects().length || style.display === "none" || style.visibility === "hidden") continue;
           }
         } else if (!el.getClientRects().length || style.display === "none" || style.visibility === "hidden") continue;
         // Closed disclosures can still give descendants layout rectangles.
