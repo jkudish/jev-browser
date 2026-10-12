@@ -15,6 +15,8 @@ import {
 } from "../dist/lib.js";
 import { navigate } from "../dist/navigate.js";
 
+const noJudgment = { name: "fixture", async ask() { assert.fail("timed-out navigation must not request a judgment"); } };
+
 const el = (over = {}) => ({
   attr: "j1",
   tag: "a",
@@ -588,6 +590,7 @@ test("navigate reuses an injected Playwright page and leaves its lifecycle to th
       page,
       maxSeconds: 0,
       screenshot: "none",
+      transport: noJudgment,
     });
 
     assert.equal(result.status, "timeout");
@@ -695,6 +698,7 @@ test("injected credential pages suppress the screenshot even before any fill", a
       page,
       maxSeconds: 0,
       password: { value: "unit-visible-secret-value", origin: "https://example.com" },
+      transport: noJudgment,
     });
     assert.equal(result.status, "timeout");
     assert.equal(result.screenshot_base64_jpeg, null, "screenshot bytes must be suppressed on injected credential pages");
@@ -1396,6 +1400,7 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
       startUrl: origin + "/orders",
       maxSeconds: 0,
       cookies: [{ name: "session", value: VALUE }],
+      transport: noJudgment,
     });
     assert.equal(result.status, "timeout");
     // The cookie actually seeded: the document 403s without it.
