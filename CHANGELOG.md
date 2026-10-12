@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.8.6
 
 - Improved disclosure menus, custom radio and checkbox controls, and toggle/sort state visibility. Control-state changes count as progress without exposing field values. Thanks to [@dodgy8452](https://github.com/dodgy8452) for the reproductions in #26, #27 and #28.
-- Updated AI SDK and typing-provider dependencies.
+- Valid near-tie Jev choices are no longer rejected for a one-step probability discrepancy, via jev-agent-tools 0.2.1. Updated AI SDK, typing-provider, and Zod dependencies.
 
 ## 0.8.5
 
