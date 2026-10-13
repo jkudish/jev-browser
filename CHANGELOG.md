@@ -16,6 +16,7 @@ Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the p
 
 ### Providers
 
+- SubQ Decisions: explicit-only `DISCERN_PROVIDER=subq`, `DISCERN_SUBQ_API_KEY` (or `SUBQ_API_KEY`), optional `DISCERN_SUBQ_BASE_URL`; both default aliases map to `subq-snap-preview`. Native inputs/fractional scores and effective-model metadata are preserved. Shared serial 16-question batching fails closed under one deadline. Cost estimates use $0.05 per million input tokens, output free. Typing and 0.85 stop/stuck thresholds are unchanged; SubQ calibration is not established. API data is retained indefinitely by default; organization ZDR requires contacting SubQ.
 - OpenAI Decisions with `DISCERN_PROVIDER=openai`, keyed by `DISCERN_OPENAI_API_KEY` (or `OPENAI_API_KEY`, which also drives typing). Never auto-detected. The 0.85 stop thresholds were tuned on Jev and are unverified on it.
 - Cloudflare's Clef with `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`.
 - The System One-compatible endpoint (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`) is available as a carrier.

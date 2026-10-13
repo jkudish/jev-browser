@@ -7,7 +7,7 @@
   <img src=".github/discern-browser-banner.png" alt="discern-browser: a browser agent driven by typed judgments. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
 </p>
 
-Fast and very cheap browser use, driven by structured judgments from TypeSafe's Jev model or OpenAI's Decisions API.
+Fast and very cheap browser use, driven by structured judgments from TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, or SubQ Decisions.
 
 Formerly `@jkudish/jev-browser`. Existing setups keep working through 1.x; see [Migrating from jev-browser](#migrating-from-jev-browser).
 
@@ -480,6 +480,14 @@ A sixth carrier, **OpenAI Decisions** (`DISCERN_OPENAI_API_KEY` or `OPENAI_API_K
 
 The Cloudflare carrier also runs Cloudflare's own [Clef decision models](https://blog.cloudflare.com/clef-decision-models/): set `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`. Clef uses Jev's request and answer format, so nothing is translated. `clef-flash` answers a step in a few hundred milliseconds warm, but it is a different model from Jev, so the 0.85 stop thresholds are unverified on it too; cost estimates still use Jev's input price, because Cloudflare bills Workers AI separately.
 
+**SubQ Decisions** is explicit-only: set `DISCERN_PROVIDER=subq` and `DISCERN_SUBQ_API_KEY` (preferred) or `SUBQ_API_KEY`. `latest` and `jev-latest` map to `subq-snap-preview`; `DISCERN_BROWSER_MODEL` can pin another ID. Results report `judgment_provider: "subq"` (and its equal legacy `jev_provider`) with the effective model. SubQ does not configure typing.
+
+- [Snap is in public preview](https://docs.subq.ai/endpoints/decisions-api/) with its own calibration. The existing 0.85 stop/stuck thresholds stay unchanged and need evaluation on your own labeled cases.
+- Native structured inputs, probabilities and fractional scores are preserved. Limits: 255 Choice options, 10 Score levels, 100-character question IDs, 393,216-token context (near-limit requests can fail). Images are not exposed by this adapter.
+- The shared package splits batches over the observed 16-question limit into serial chunks under one deadline. It repeats state and sums usage, stops on failure or cancellation, and exposes no partial answers on malformed chunks. Earlier chunks may still be billed; inconsistent effective models fail.
+- Cost estimates use $0.05 per million input tokens, output free. Repeated state increases both usage and latency for larger batches.
+- **API data is retained indefinitely by default.** Organization-level ZDR requires contacting SubQ; there is no documented Decisions `store:false` control. Review [retention](https://docs.subq.ai/using-the-api/data-retention/) before sending sensitive page content.
+
 `DISCERN_PROVIDER` forces one of them; an unknown name or a missing credential is a configuration error, never a silent fallback. Typing is configured separately with `DISCERN_BROWSER_TYPE_*`.
 
 The built-ins stay limited to major providers. For anything else, library callers can inject a transport ([Judgment transports in the library](#judgment-transports-in-the-library)), use a published third-party driver package, or publish their own; published drivers get linked here on request. The [add-a-provider guide](https://github.com/jkudish/discern-agent-tools#adding-a-provider) covers all three paths.
@@ -491,8 +499,10 @@ The built-ins stay limited to major providers. For anything else, library caller
 | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | none | Cloudflare Workers AI for the Jev judgments; used when no other provider key is present. `DISCERN_CLOUDFLARE_API_TOKEN` is honored first for separate credentials. |
 | `AI_GATEWAY_API_KEY` | none | Vercel AI Gateway for Jev judgments after the other providers. |
 | `DISCERN_VERCEL_ZERO_DATA_RETENTION` | unset | `1` or `true` requests Vercel AI Gateway zero-data-retention routing for Jev judgments; use with `DISCERN_PROVIDER=vercel`. See [Vercel](#vercel). |
-| `DISCERN_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, or `openai` for judgment calls instead of auto-detection; `openai` is only ever selected this way. Judgment transport only; typing is configured separately with `DISCERN_BROWSER_TYPE_*`. |
-| `DISCERN_BROWSER_MODEL` | `latest` | Judgment model. `latest` is each carrier's current default (Jev, or `gpt-6-luna` on OpenAI). Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter; with `DISCERN_PROVIDER=cloudflare`, `clef` or `clef-flash` selects Cloudflare's Clef. |
+| `DISCERN_PROVIDER` | `auto` | Force `typesafe`, `openrouter`, `cloudflare`, `vercel`, `compatible`, `openai`, or `subq` for judgments; `openai` and `subq` are explicit-only. Typing is configured separately. |
+| `DISCERN_SUBQ_API_KEY` or `SUBQ_API_KEY` | none | SubQ judgment key, `DISCERN_SUBQ_API_KEY` first. |
+| `DISCERN_SUBQ_BASE_URL` | `https://api.subq.ai/v1` | Override the SubQ API root (`/systemone` is appended). |
+| `DISCERN_BROWSER_MODEL` | `latest` | Judgment model: current default (Jev, `gpt-6-luna` on OpenAI, `subq-snap-preview` on SubQ). Pin a Jev version, or `typesafe/jev-1.13` on OpenRouter; `clef` or `clef-flash` on Cloudflare. |
 | `DISCERN_BROWSER_TYPE_*` | see above | Typing provider, model, and endpoint. |
 | `DISCERN_BROWSER_HEADED` | unset | Set to `1` to watch the browser. |
 | `DISCERN_BROWSER_SKIP_BROWSER_DOWNLOAD` | unset | Set to `1` to skip the Chromium postinstall. |
@@ -539,6 +549,8 @@ Every environment variable this package reads moves from `JEV_` to `DISCERN_` (o
 | --- | --- |
 | `JEV_PROVIDER` | `DISCERN_PROVIDER` |
 | `JEV_OPENAI_API_KEY` | `DISCERN_OPENAI_API_KEY` |
+| `JEV_SUBQ_API_KEY` | `DISCERN_SUBQ_API_KEY` |
+| `JEV_SUBQ_BASE_URL` | `DISCERN_SUBQ_BASE_URL` |
 | `JEV_CLOUDFLARE_API_TOKEN` | `DISCERN_CLOUDFLARE_API_TOKEN` |
 | `JEV_VERCEL_ZERO_DATA_RETENTION` | `DISCERN_VERCEL_ZERO_DATA_RETENTION` |
 | `JEV_BROWSER_MODEL` | `DISCERN_BROWSER_MODEL` |

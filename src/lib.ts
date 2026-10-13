@@ -201,9 +201,12 @@ export const PRICE_PER_MTOK_IN = 0.042;
 /** OpenAI Decisions (gpt-6-luna) published pricing: input $0.10 per M tokens, output free. */
 export const OPENAI_DECISIONS_PRICE_PER_MTOK_IN = 0.1;
 
-/** Input price for the carrier that answered. Non-OpenAI carriers use Jev's price, including Cloudflare's Clef, whose Workers AI billing is separate and unpublished here. */
+/** SubQ Snap preview published pricing: input $0.05 per M tokens, output free. */
+export const SUBQ_PRICE_PER_MTOK_IN = 0.05;
+
+/** Input price for the carrier that answered. Other carriers use Jev's price, including Clef, whose Workers AI billing is separate. */
 export function pricePerMTokIn(provider: string | null): number {
-  return provider === "openai" ? OPENAI_DECISIONS_PRICE_PER_MTOK_IN : PRICE_PER_MTOK_IN;
+  return provider === "subq" ? SUBQ_PRICE_PER_MTOK_IN : provider === "openai" ? OPENAI_DECISIONS_PRICE_PER_MTOK_IN : PRICE_PER_MTOK_IN;
 }
 
 // ── Typing generator selection and degradation records ──────────────────────
@@ -625,4 +628,3 @@ export function parseCookieSpec(spec: string): SeedCookie {
   if (eq <= 0) throw new Error("cookie expects name=value");
   return { name: spec.slice(0, eq), value: spec.slice(eq + 1) };
 }
-
