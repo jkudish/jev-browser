@@ -107,7 +107,7 @@ server.registerTool(
     title: "Navigate a browser with Discern",
     description:
       "Give a task and a start URL; an agent driven by structured model judgments (TypeSafe Jev by default, or Cloudflare " +
-      "Clef or OpenAI Decisions) navigates a real headless browser until the goal is met, " +
+      "Clef, OpenAI Decisions, or SubQ Decisions) navigates a real headless browser until the goal is met, " +
       "the stuck gate fires, or a budget (steps/seconds) is exhausted. Returns the final page in a chosen format " +
       "(text, markdown, html, or an aria snapshot), the full step trace with confidences, console/page/network " +
       "errors captured along the way, token usage with estimated cost, and a final screenshot. " +

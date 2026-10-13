@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/discern-browser-banner.png" alt="discern-browser: a browser agent driven by typed judgments. Runs on TypeSafe's Jev, Cloudflare's Clef, or OpenAI Decisions." />
+  <img src=".github/discern-browser-banner.png" alt="discern-browser: a browser agent driven by typed judgments from TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, or SubQ Decisions." />
 </p>
 
 Fast and very cheap browser use, driven by structured judgments from TypeSafe's Jev, Cloudflare's Clef, OpenAI Decisions, or SubQ Decisions.
@@ -13,7 +13,7 @@ Formerly `@jkudish/jev-browser`. Existing setups keep working through 1.x; see [
 
 Give discern-browser a task and a URL.
 
-It drives a real headless browser through an MCP server, CLI, or library. A judgment model (TypeSafe's Jev by default, or Cloudflare's Clef or OpenAI Decisions when you choose it) picks one action per step from the page's clickable, typeable, and selectable elements, and scores how likely it is that the goal is met or the run is stuck. Code owns the loop: budgets, recovery, stop gates. You get the final page, a step trace with confidences, console errors, and a screenshot.
+It drives a real headless browser through an MCP server, CLI, or library. A judgment model (TypeSafe's Jev by default, or Cloudflare's Clef, OpenAI Decisions, or SubQ Decisions when you choose it) picks one action per step from the page's clickable, typeable, and selectable elements, and scores how likely it is that the goal is met or the run is stuck. Code owns the loop: budgets, recovery, stop gates. You get the final page, a step trace with confidences, console errors, and a screenshot.
 
 Things it has done on real sites, not demos:
 
@@ -27,11 +27,11 @@ This is early software. Expect rough edges on harder sites. Issues and pull requ
 
 ## Demo
 
-Searches GitHub for this repository, opens Releases, and answers a question about the page. Every judgment (TypeSafe's Jev, in this recording) is on the right: the action chosen, its confidence, and the goal and stuck probabilities for each step.
+Discern Browser searches GitHub and opens this repository in a real, recorded run: five judgments in 8.65 seconds. The recorded trace on the right shows the action chosen, its confidence, and the goal and stuck probabilities for each step. This take uses TypeSafe's `jev-1.13.0` for judgments and OpenRouter for typing; it finishes on the correct repository URL with goal probability 0.97. GitHub still uses the `jkudish/jev-browser` name until the repository rename.
 
-![discern-browser searching GitHub and opening its own Releases page, judgment trace on the right](assets/github-demo.gif)
+![discern-browser searching GitHub and opening its repository, recorded judgment trace on the right](assets/github-demo.gif)
 
-Full-resolution video: [assets/github-demo.mp4](assets/github-demo.mp4).
+Full-resolution video: [assets/github-demo.mp4](assets/github-demo.mp4). [Recorded trace](assets/github-demo.json) · [Reproduction instructions](.github/brand/README.md#browser-demo).
 
 ## Install
 
@@ -188,7 +188,7 @@ console.log(result.page.content);
 
 ### Judgment transports in the library
 
-The built-in judgment transports are TypeSafe, OpenRouter, Cloudflare, and Vercel (all serving Jev), selected in that order from configured credentials, plus OpenAI Decisions, which is selected only explicitly. Selection and answer validation live in the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) package. `DISCERN_PROVIDER` forces one of them; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
+Automatic judgment-provider selection tries TypeSafe, OpenRouter, Cloudflare, Vercel, then a configured compatible endpoint. OpenAI Decisions and SubQ Decisions require explicit selection. Cloudflare serves Jev by default or Clef when selected by model name. Selection and answer validation live in the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) package. `DISCERN_PROVIDER` forces a provider; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
 
 ```ts
 import { navigate, type DiscernTransport } from "@jkudish/discern-browser";
@@ -429,7 +429,7 @@ Statuses: `done` (agent chose to stop), `goal_achieved` (the goal watcher fired)
 
 ## The typing model
 
-The judgment model never generates text. Jev and OpenAI Decisions both return typed decisions only: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs once per typed field, so a multi-field form makes one call per field. Each call is capped at 256 output tokens on OpenRouter and Google and 48 tokens on every other provider. Reasoning is disabled on OpenRouter and on Gemini Flash models (reasoning models can burn the whole budget on hidden tokens and return empty text; Gemini 3 Flash keeps its minimum thinking level). Gemini Pro models cannot turn thinking that low, so they keep their default thinking.
+The judgment model never generates field text. Every supported judgment provider returns typed decisions: which option, with what probabilities. So when a task needs a string, typing a search query or filling a field, that string comes from a small model you choose. This is the only place a second model is involved, and it runs once per typed field, so a multi-field form makes one call per field. Each call is capped at 256 output tokens on OpenRouter and Google and 48 tokens on every other provider. Reasoning is disabled on OpenRouter and on Gemini Flash models (reasoning models can burn the whole budget on hidden tokens and return empty text; Gemini 3 Flash keeps its minimum thinking level). Gemini Pro models cannot turn thinking that low, so they keep their default thinking.
 
 `DISCERN_PROVIDER` is not involved here at all: it selects the transport for the judgments and has nothing to do with typing. Typing configuration is a separate set of variables.
 
@@ -461,17 +461,17 @@ With no provider at all, or when the typing model fails or returns empty text, t
 
 ## Limits
 
-- Up to 240 elements per step; a Choice question supports 255 options on both Jev and OpenAI Decisions. Beyond that the list is truncated and the state says so, which can hide the needed element on very dense pages.
+- Up to 240 elements per step; the built-in judgment models support Choice questions with up to 255 options. Beyond that the element list is truncated and the state says so, which can hide the needed element on very dense pages. Injected transports must support the browser's question sizes.
 - The markdown format converts the whole body, so it carries navigation chrome and can include inline script text; a readability pass is a candidate improvement, not a committed one.
 - Password fields are only ever filled by code, never typed by the model, and only when a password source is configured (see [Password fill](#password-fill-logins)); file inputs are never offered. Start behind a login with [seed cookies](#seed-cookies-start-behind-a-login) (`cookies` on `navigate()`, `--cookie-file` on the CLI, `cookie_file`/`cookie_env` on MCP). Hover-revealed menus, keyboard actions other than Enter within the explicit search and submit actions (Escape, Tab, arrow keys), shadow DOM, and iframes are out of scope for v0.1.
 - Thresholds (0.85 goal, 0.85 stuck, budgets) are starting points measured on Wikipedia and DuckDuckGo tasks. Tune them for your sites.
-- Judgments are calibrated, not infallible. Treat the trace as evidence, not proof. The 0.85 thresholds were tuned on Jev; OpenAI Decisions has its own calibration and is unverified against them.
+- Treat probabilities and the trace as evidence, not proof. The 0.85 thresholds were tuned on Jev; passing live suites on another model does not establish calibration or safety on your sites. Evaluate each model against your own labeled cases before enforcing those thresholds.
 
 ## Configuration
 
 ### Providers
 
-Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Five carriers serving TypeSafe's Jev are built in, tried in this order:
+Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Automatic selection tries these carriers in order:
 
 - **TypeSafe** (`TYPESAFE_API_KEY`): direct, and the default when set.
 - **OpenRouter** (`OPENROUTER_API_KEY`): one key can also run the typing model.
@@ -481,7 +481,7 @@ Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/j
 
 Every carrier gets the shared package's retries (408, 409, 429, and 5xx only), 60-second deadline, and response-size ceiling.
 
-A sixth carrier, **OpenAI Decisions** (`DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`), runs only with `DISCERN_PROVIDER=openai` and is never auto-detected, because `OPENAI_API_KEY` may already be configured for typing. It maps the default `latest` to `gpt-6-luna`, which is a different model from Jev: the `goal_done` and `stuck` stop thresholds (0.85) were tuned on Jev and are unverified on it. Cost estimates use its $0.10 per million input tokens.
+**OpenAI Decisions** (`DISCERN_OPENAI_API_KEY` or `OPENAI_API_KEY`) runs only with `DISCERN_PROVIDER=openai` and is never auto-detected, because `OPENAI_API_KEY` may already be configured for typing. It maps the default `latest` to `gpt-6-luna`, which is a different model from Jev: the `goal_done` and `stuck` stop thresholds (0.85) need evaluation on your own labeled cases. Cost estimates use its $0.10 per million input tokens.
 
 The Cloudflare carrier also runs Cloudflare's own [Clef decision models](https://blog.cloudflare.com/clef-decision-models/): set `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`. Clef uses Jev's request and answer format, so nothing is translated. `clef-flash` answers a step in a few hundred milliseconds warm, but it is a different model from Jev, so the 0.85 stop thresholds are unverified on it too; cost estimates still use Jev's input price, because Cloudflare bills Workers AI separately.
 
@@ -586,7 +586,7 @@ To migrate, install `@jkudish/discern-browser`, rename your `JEV_` variables, ca
 
 ## Also in the family
 
-Need the judgments without the browser? [Discern MCP](https://github.com/jkudish/discern-mcp) exposes the same judgment providers as eleven tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, gauge bare propositions, find and rerank by meaning, batch-classify, decide, compare passages, extract fields, and review or gate patches and completion claims. The npm package is [@jkudish/discern-mcp](https://www.npmjs.com/package/@jkudish/discern-mcp).
+Need the judgments without the browser? [Discern MCP](https://github.com/jkudish/discern-mcp) exposes the same judgment providers as twelve tools your agent can call anywhere: verify claims against evidence, screen content before it enters context, gauge bare propositions, find and rerank by meaning, batch-classify, decide, compare passages, extract fields, audit extracted values, and review or gate patches and completion claims. The npm package is [@jkudish/discern-mcp](https://www.npmjs.com/package/@jkudish/discern-mcp).
 
 ## Sponsoring
 
