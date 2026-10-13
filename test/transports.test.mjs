@@ -384,6 +384,7 @@ test("cost estimate uses the answering carrier's input price", async (t) => {
       return result.usage.est_cost_usd;
     };
     assert.equal(await cost("openai"), 0.1);
+    assert.equal(await cost("subq"), 0.05);
     assert.equal(await cost("typesafe"), 0.042);
   } finally { await browser.close(); }
 });

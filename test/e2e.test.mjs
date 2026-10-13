@@ -16,6 +16,7 @@ const serverPath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const e = process.env;
 const selected = (e.DISCERN_PROVIDER || e.JEV_PROVIDER || "").toLowerCase();
 const hasKey = selected === "openai" ? Boolean(e.DISCERN_OPENAI_API_KEY || e.JEV_OPENAI_API_KEY || e.OPENAI_API_KEY)
+  : selected === "subq" ? Boolean(e.DISCERN_SUBQ_API_KEY || e.JEV_SUBQ_API_KEY || e.SUBQ_API_KEY)
   : selected === "cloudflare" ? Boolean((e.DISCERN_CLOUDFLARE_API_TOKEN || e.JEV_CLOUDFLARE_API_TOKEN || e.CLOUDFLARE_API_TOKEN) && e.CLOUDFLARE_ACCOUNT_ID)
   : Boolean(e.TYPESAFE_API_KEY);
 
@@ -193,7 +194,8 @@ async function withClient(fn, extraEnv = {}) {
       // under their DISCERN_ names or the legacy JEV_ aliases.
       // DISCERN_OPENAI_API_KEY, not OPENAI_API_KEY, carries the judgment key,
       // so typing-provider selection is unchanged.
-      ...forwarded(["DISCERN_BROWSER_TYPE_MODEL", "DISCERN_PROVIDER", "DISCERN_OPENAI_API_KEY", "DISCERN_BROWSER_MODEL", "DISCERN_CLOUDFLARE_API_TOKEN"]),
+      ...forwarded(["DISCERN_BROWSER_TYPE_MODEL", "DISCERN_PROVIDER", "DISCERN_OPENAI_API_KEY", "DISCERN_SUBQ_API_KEY", "DISCERN_SUBQ_BASE_URL", "DISCERN_BROWSER_MODEL", "DISCERN_CLOUDFLARE_API_TOKEN"]),
+      ...(process.env.SUBQ_API_KEY ? { SUBQ_API_KEY: process.env.SUBQ_API_KEY } : {}),
       ...(process.env.CLOUDFLARE_ACCOUNT_ID ? { CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID } : {}),
       ...extraEnv,
     },
