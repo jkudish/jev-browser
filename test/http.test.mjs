@@ -40,7 +40,7 @@ async function listTools(url, versionNegotiation) {
   }
 }
 
-test("--http refuses a non-loopback bind without JEV_BROWSER_AUTH_TOKEN", async () => {
+test("--http refuses a non-loopback bind without DISCERN_BROWSER_AUTH_TOKEN", async () => {
   const child = spawn(process.execPath, [serverPath, "--http"], {
     env: { PATH: process.env.PATH, TYPESAFE_API_KEY: "test-key", HOST: "0.0.0.0", PORT: "0" },
     stdio: "ignore",
@@ -50,7 +50,7 @@ test("--http refuses a non-loopback bind without JEV_BROWSER_AUTH_TOKEN", async 
 });
 
 test("--http serves 2025-era and 2026-07-28 clients statelessly behind a bearer token", async () => {
-  const { url, stop } = await startHttp({ JEV_BROWSER_AUTH_TOKEN: TOKEN });
+  const { url, stop } = await startHttp({ DISCERN_BROWSER_AUTH_TOKEN: TOKEN });
   try {
     assert.equal((await fetch(new URL("/health", url))).status, 200);
     const denied = await fetch(url, {
@@ -62,7 +62,7 @@ test("--http serves 2025-era and 2026-07-28 clients statelessly behind a bearer 
 
     const legacy = await listTools(url);
     assert.equal(legacy.era, "legacy");
-    assert.deepEqual(legacy.names, ["jev_navigate"]);
+    assert.deepEqual(legacy.names, ["discern_navigate"]);
 
     const modern = await listTools(url, { mode: { pin: "2026-07-28" } });
     assert.equal(modern.era, "modern");
@@ -128,7 +128,7 @@ test("--http defaults to a loopback bind when HOST is unset", async () => {
 });
 
 test("--http advertises a static tool list and refuses subscriptions/listen without holding a slot", async () => {
-  const { url, stop } = await startHttp({ JEV_BROWSER_MAX_CONCURRENCY: "1", JEV_BROWSER_AUTH_TOKEN: TOKEN });
+  const { url, stop } = await startHttp({ DISCERN_BROWSER_MAX_CONCURRENCY: "1", DISCERN_BROWSER_AUTH_TOKEN: TOKEN });
   try {
     const client = new Client(
       { name: "listen-test", version: "1.0.0" },
@@ -161,7 +161,7 @@ test("--http releases the slot when a client disconnects mid tools/call", async 
   const stall = createServer(() => {});
   await new Promise((resolve) => stall.listen(0, "127.0.0.1", resolve));
   const stallUrl = `http://127.0.0.1:${stall.address().port}/`;
-  const { url, stop } = await startHttp({ JEV_BROWSER_MAX_CONCURRENCY: "1", JEV_BROWSER_AUTH_TOKEN: TOKEN });
+  const { url, stop } = await startHttp({ DISCERN_BROWSER_MAX_CONCURRENCY: "1", DISCERN_BROWSER_AUTH_TOKEN: TOKEN });
   const post = (id, body) =>
     new Promise((resolve, reject) => {
       const req = request(url, {
@@ -194,7 +194,7 @@ test("--http releases the slot when a client disconnects mid tools/call", async 
     call.on("error", () => {});
     call.end(JSON.stringify({
       jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "jev_navigate", arguments: { task: "Open the page", start_url: stallUrl, max_steps: 2, max_seconds: 60, screenshot: "none" } },
+      params: { name: "discern_navigate", arguments: { task: "Open the page", start_url: stallUrl, max_steps: 2, max_seconds: 60, screenshot: "none" } },
     }));
     await new Promise((r) => setTimeout(r, 1500));
     // Disconnect the caller mid-navigation: the abort must tear the run down
@@ -207,8 +207,8 @@ test("--http releases the slot when a client disconnects mid tools/call", async 
   }
 });
 
-test("--http sheds load with 429 past JEV_BROWSER_MAX_CONCURRENCY", async () => {
-  const { url, stop } = await startHttp({ JEV_BROWSER_MAX_CONCURRENCY: "1", JEV_BROWSER_AUTH_TOKEN: TOKEN });
+test("--http sheds load with 429 past DISCERN_BROWSER_MAX_CONCURRENCY", async () => {
+  const { url, stop } = await startHttp({ DISCERN_BROWSER_MAX_CONCURRENCY: "1", DISCERN_BROWSER_AUTH_TOKEN: TOKEN });
   // Hold the one permitted slot open mid-body: raw socket, headers sent, body withheld.
   const held = connect({ host: url.hostname, port: Number(url.port) });
   await once(held, "connect");

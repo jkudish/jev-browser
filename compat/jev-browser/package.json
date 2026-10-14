@@ -1,0 +1,46 @@
+{
+  "name": "@jkudish/jev-browser",
+  "version": "1.0.0",
+  "description": "Compatibility package: @jkudish/jev-browser is now @jkudish/discern-browser. Provides the jev-browser bin (listing the legacy jev_navigate tool name) and re-exports the library. Removed in 2.0.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Joey Kudish",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jkudish/discern-browser.git",
+    "directory": "compat/jev-browser"
+  },
+  "bin": {
+    "jev-browser": "bin.js"
+  },
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./dist/navigate.js": {
+      "types": "./navigate.d.ts",
+      "default": "./navigate.js"
+    }
+  },
+  "files": [
+    "bin.js",
+    "index.js",
+    "index.d.ts",
+    "navigate.js",
+    "navigate.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@jkudish/discern-browser": "^1.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

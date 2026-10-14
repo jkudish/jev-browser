@@ -187,8 +187,33 @@ import {
   readHandoffSecret,
   readSecretFromEnv,
   assertNoPlaywrightDebug,
+  handoffDir,
   PASSWORD_REDACTED,
 } from "../dist/password.js";
+
+test("handoffDir defaults to ~/.discern-browser/handoff and falls back to an existing legacy ~/.jev-browser/handoff", async () => {
+  const home = await mkdtemp(join(tmpdir(), "discern-home-"));
+  const saved = { HOME: process.env.HOME, DISCERN_BROWSER_HANDOFF_DIR: process.env.DISCERN_BROWSER_HANDOFF_DIR };
+  try {
+    process.env.HOME = home;
+    delete process.env.DISCERN_BROWSER_HANDOFF_DIR;
+    const current = join(home, ".discern-browser", "handoff");
+    const legacy = join(home, ".jev-browser", "handoff");
+    assert.equal(handoffDir(), current, "neither exists: the new default");
+    await mkdir(legacy, { recursive: true });
+    assert.equal(handoffDir(), legacy, "only the legacy directory exists: keep using it");
+    await mkdir(current, { recursive: true });
+    assert.equal(handoffDir(), current, "both exist: the new default wins");
+    process.env.DISCERN_BROWSER_HANDOFF_DIR = "/configured/handoff";
+    assert.equal(handoffDir(), "/configured/handoff");
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 test("parseTrustedOrigin accepts exact origins, rejects everything looser", () => {
   assert.equal(parseTrustedOrigin("https://acme.com"), "https://acme.com");
@@ -508,14 +533,24 @@ test("validateSecretBuffer counts code points, not UTF-16 units", () => {
   assert.equal(validateSecretBuffer(Buffer.from("🐟🐟xy")), "🐟🐟xy"); // 4 code points, passes
 });
 
-test("readSecretFromEnv enforces the JEV_PASSWORD_ prefix before lookup", () => {
-  process.env.JEV_PASSWORD_UNITTEST = "env-carried-secret";
+test("readSecretFromEnv enforces the DISCERN_PASSWORD_ prefix before lookup and accepts the legacy JEV_ name", () => {
+  process.env.DISCERN_PASSWORD_UNITTEST = "env-carried-secret";
+  assert.equal(readSecretFromEnv("DISCERN_PASSWORD_UNITTEST").toString(), "env-carried-secret");
+  // Startup normalization copies JEV_PASSWORD_X into DISCERN_PASSWORD_X; the
+  // legacy name in a tool argument reads that DISCERN_ value, never JEV_ itself.
   assert.equal(readSecretFromEnv("JEV_PASSWORD_UNITTEST").toString(), "env-carried-secret");
-  assert.throws(() => readSecretFromEnv("TYPESAFE_API_KEY"), /JEV_PASSWORD_/);
-  assert.throws(() => readSecretFromEnv("OPENAI_API_KEY"), /JEV_PASSWORD_/);
-  assert.throws(() => readSecretFromEnv("JEV_PASSWORD_MISSING"), /not set/);
-  assert.throws(() => validateSecretBuffer(readSecretFromEnv("JEV_PASSWORD_UNITTEST").subarray(0, 0)), /empty/);
-  delete process.env.JEV_PASSWORD_UNITTEST;
+  process.env.JEV_PASSWORD_ONLYLEGACY = "legacy-only-secret";
+  assert.throws(() => readSecretFromEnv("JEV_PASSWORD_ONLYLEGACY"), (error) => /JEV_PASSWORD_ONLYLEGACY is not set/.test(error.message) && !error.message.includes("legacy-only-secret"));
+  delete process.env.JEV_PASSWORD_ONLYLEGACY;
+  assert.throws(() => readSecretFromEnv("TYPESAFE_API_KEY"), /DISCERN_PASSWORD_/);
+  assert.throws(() => readSecretFromEnv("OPENAI_API_KEY"), /DISCERN_PASSWORD_/);
+  assert.throws(() => readSecretFromEnv("JEV_COOKIE_UNITTEST"), /DISCERN_PASSWORD_/);
+  process.env.DISCERN_COOKIE_UNITTEST = "cookie-carried-secret";
+  assert.equal(readSecretFromEnv("JEV_COOKIE_UNITTEST", { prefix: "DISCERN_COOKIE_", what: "cookie_env" }).toString(), "cookie-carried-secret");
+  delete process.env.DISCERN_COOKIE_UNITTEST;
+  assert.throws(() => readSecretFromEnv("DISCERN_PASSWORD_MISSING"), /not set/);
+  assert.throws(() => validateSecretBuffer(readSecretFromEnv("DISCERN_PASSWORD_UNITTEST").subarray(0, 0)), /empty/);
+  delete process.env.DISCERN_PASSWORD_UNITTEST;
 });
 
 test("redactor survives secrets that collide with the redaction marker", () => {
@@ -734,53 +769,53 @@ test("resolveTypingSelection auto-detects in candidate order (a stale openai key
   assert.equal(resolveTypingSelection({ OPENROUTER_API_KEY: "not-an-or-key-01234567890" }), null);
   // the model override passes through unchanged
   assert.equal(
-    resolveTypingSelection({ OPENAI_API_KEY: "sk-openai-key-0123456789", JEV_BROWSER_TYPE_MODEL: "anthropic/claude-haiku-4.5" }).modelId,
+    resolveTypingSelection({ OPENAI_API_KEY: "sk-openai-key-0123456789", DISCERN_BROWSER_TYPE_MODEL: "anthropic/claude-haiku-4.5" }).modelId,
     "anthropic/claude-haiku-4.5",
   );
 });
 
 test("resolveTypingSelection: BASE_URL selects a compatible endpoint; TYPE_PROVIDER runs through it", () => {
-  const custom = resolveTypingSelection({ JEV_BROWSER_TYPE_BASE_URL: "http://localhost:11434/v1", JEV_BROWSER_TYPE_MODEL: "qwen2.5:7b" });
+  const custom = resolveTypingSelection({ DISCERN_BROWSER_TYPE_BASE_URL: "http://localhost:11434/v1", DISCERN_BROWSER_TYPE_MODEL: "qwen2.5:7b" });
   assert.deepEqual(custom, { provider: "compatible-endpoint", modelId: "qwen2.5:7b", baseUrl: "http://localhost:11434/v1" });
   const layered = resolveTypingSelection({
-    JEV_BROWSER_TYPE_PROVIDER: "openrouter",
+    DISCERN_BROWSER_TYPE_PROVIDER: "openrouter",
     OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789",
-    JEV_BROWSER_TYPE_BASE_URL: "http://127.0.0.1:1",
+    DISCERN_BROWSER_TYPE_BASE_URL: "http://127.0.0.1:1",
   });
   assert.equal(layered.provider, "openrouter");
   assert.equal(layered.modelId, "google/gemini-2.5-flash-lite");
   assert.equal(layered.baseUrl, "http://127.0.0.1:1");
   // BASE_URL must at least be a valid absolute http(s) URL
-  assert.throws(() => resolveTypingSelection({ JEV_BROWSER_TYPE_BASE_URL: "not a url" }), /JEV_BROWSER_TYPE_BASE_URL/);
-  assert.throws(() => resolveTypingSelection({ JEV_BROWSER_TYPE_BASE_URL: "ftp://x/y" }), /http/);
+  assert.throws(() => resolveTypingSelection({ DISCERN_BROWSER_TYPE_BASE_URL: "not a url" }), /DISCERN_BROWSER_TYPE_BASE_URL/);
+  assert.throws(() => resolveTypingSelection({ DISCERN_BROWSER_TYPE_BASE_URL: "ftp://x/y" }), /http/);
 });
 
-test("resolveTypingSelection: JEV_BROWSER_TYPE_PROVIDER selects only that provider, or throws", () => {
+test("resolveTypingSelection: DISCERN_BROWSER_TYPE_PROVIDER selects only that provider, or throws", () => {
   const forced = resolveTypingSelection({
-    JEV_BROWSER_TYPE_PROVIDER: "openai",
+    DISCERN_BROWSER_TYPE_PROVIDER: "openai",
     OPENAI_API_KEY: "sk-openai-key-0123456789",
     OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789",
   });
   assert.equal(forced.provider, "openai");
   // unknown value
   assert.throws(
-    () => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "bogus" }),
-    /JEV_BROWSER_TYPE_PROVIDER "bogus".*openai, openrouter, anthropic, google/,
+    () => resolveTypingSelection({ DISCERN_BROWSER_TYPE_PROVIDER: "bogus" }),
+    /DISCERN_BROWSER_TYPE_PROVIDER "bogus".*openai, openrouter, anthropic, google/,
   );
   // missing key for the selected provider
-  assert.throws(() => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "anthropic" }), /ANTHROPIC_API_KEY.*sk-ant-/);
+  assert.throws(() => resolveTypingSelection({ DISCERN_BROWSER_TYPE_PROVIDER: "anthropic" }), /ANTHROPIC_API_KEY.*sk-ant-/);
   // malformed key for the selected provider, even when another provider is fine
   assert.throws(
-    () => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "openai", OPENAI_API_KEY: "sk-short", OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" }),
+    () => resolveTypingSelection({ DISCERN_BROWSER_TYPE_PROVIDER: "openai", OPENAI_API_KEY: "sk-short", OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" }),
     /OPENAI_API_KEY.*no other typing provider/,
   );
   // shape-valid length but wrong shape for the selected provider
   assert.throws(
-    () => resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "AIza-not-an-anthropic-key-012345" }),
+    () => resolveTypingSelection({ DISCERN_BROWSER_TYPE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "AIza-not-an-anthropic-key-012345" }),
     /sk-ant-/,
   );
   // google accepts either env var name
-  const gemini = resolveTypingSelection({ JEV_BROWSER_TYPE_PROVIDER: "google", GEMINI_API_KEY: "AIza-google-key-0123456789" });
+  const gemini = resolveTypingSelection({ DISCERN_BROWSER_TYPE_PROVIDER: "google", GEMINI_API_KEY: "AIza-google-key-0123456789" });
   assert.equal(gemini.provider, "google");
 });
 
@@ -893,7 +928,7 @@ test("generateTextToType: other providers keep the tight cap and send no reasoni
     // chat-completions round trip via the compatible endpoint (the openai
     // provider speaks the Responses API, whose response shape this fake does
     // not model; its request body is asserted separately below)
-    const generator = createTypingGenerator({ JEV_BROWSER_TYPE_BASE_URL: "http://typing.test/v1", JEV_BROWSER_TYPE_MODEL: "local-model" });
+    const generator = createTypingGenerator({ DISCERN_BROWSER_TYPE_BASE_URL: "http://typing.test/v1", DISCERN_BROWSER_TYPE_MODEL: "local-model" });
     const out = await generateTextToType(new AbortController().signal, generator, "task", "the field", "https://x.test/");
     assert.deepEqual(out, { ok: true, text: "quoted", via: "compatible-endpoint" }); // surrounding quotes are stripped
     assert.equal(body.model, "local-model");
@@ -961,8 +996,8 @@ test("generateTextToType: BASE_URL routes every named provider to the configured
     ];
     for (const [provider, key] of cases) {
       const generator = createTypingGenerator({
-        JEV_BROWSER_TYPE_PROVIDER: provider,
-        JEV_BROWSER_TYPE_BASE_URL: "http://proxy.internal/api",
+        DISCERN_BROWSER_TYPE_PROVIDER: provider,
+        DISCERN_BROWSER_TYPE_BASE_URL: "http://proxy.internal/api",
         ...key,
       });
       assert.equal(generator.provider, provider);
@@ -1004,7 +1039,7 @@ test("generateTextToType: google switches thinking off and raises the cap", asyn
     assert.equal(seen.body.reasoning, undefined);
 
     // Gemini 3 cannot disable thinking; "none" maps to its minimum level
-    const gemini3 = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", JEV_BROWSER_TYPE_MODEL: "gemini-3-flash" });
+    const gemini3 = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", DISCERN_BROWSER_TYPE_MODEL: "gemini-3-flash" });
     await generateTextToType(new AbortController().signal, gemini3, "task", "the search box", "https://x.test/");
     assert.deepEqual(seen.body.generationConfig.thinkingConfig, { thinkingLevel: "minimal" });
 
@@ -1018,7 +1053,7 @@ test("generateTextToType: google switches thinking off and raises the cap", asyn
       ["gemini-2.0-flash", undefined],
     ];
     for (const [model, thinkingConfig] of cases) {
-      const g = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", JEV_BROWSER_TYPE_MODEL: model });
+      const g = createTypingGenerator({ GEMINI_API_KEY: "AIza-google-key-0123456789", DISCERN_BROWSER_TYPE_MODEL: model });
       await generateTextToType(new AbortController().signal, g, "task", "the search box", "https://x.test/");
       assert.deepEqual(seen.body.generationConfig.thinkingConfig, thinkingConfig, model);
       assert.equal(seen.body.generationConfig.maxOutputTokens, 256, model);
@@ -1032,9 +1067,9 @@ test("createTypingGenerator: every provider builds a native spec-v4 model (no ai
   const cases = [
     { OPENAI_API_KEY: "sk-openai-key-0123456789" },
     { OPENROUTER_API_KEY: "sk-or-v1-openrouter-key-0123456789" },
-    { JEV_BROWSER_TYPE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-anthropic-key-0123456789" },
+    { DISCERN_BROWSER_TYPE_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-ant-anthropic-key-0123456789" },
     { GEMINI_API_KEY: "AIza-google-key-0123456789" },
-    { JEV_BROWSER_TYPE_BASE_URL: "http://typing.test/v1", JEV_BROWSER_TYPE_MODEL: "local-model" },
+    { DISCERN_BROWSER_TYPE_BASE_URL: "http://typing.test/v1", DISCERN_BROWSER_TYPE_MODEL: "local-model" },
   ];
   const seen = new Set();
   for (const env of cases) {
@@ -1648,4 +1683,17 @@ test("ARIA menu items are actionable and same-length dialog updates count as cha
     await browser.close();
     server.close();
   }
+});
+
+test("only this package's JEV_ variables alias DISCERN_ ones", async () => {
+  const { discernEnv, BROWSER_ENV_NAMES } = await import("../dist/env.js");
+  assert.ok(BROWSER_ENV_NAMES.includes("PROVIDER") && BROWSER_ENV_NAMES.includes("BROWSER_"));
+  const env = discernEnv({ JEV_BROWSER_HEADED: "1", JEV_PASSWORD_ACME: "pw-unit", JEV_COOKIE_SITE: "c", JEV_TOOL_NAMES: "jev", JEV_OPENROUTER_BASE_URL: "http://x", JEV_HOME: "/h", DISCERN_HOME: "/other" });
+  assert.equal(env.DISCERN_BROWSER_HEADED, "1");
+  assert.equal(env.DISCERN_PASSWORD_ACME, "pw-unit");
+  assert.equal(env.DISCERN_COOKIE_SITE, "c");
+  assert.equal(env.DISCERN_TOOL_NAMES, "jev");
+  assert.equal(env.DISCERN_OPENROUTER_BASE_URL, "http://x");
+  // Unrelated JEV_ variables are neither copied nor a conflict.
+  assert.equal(env.DISCERN_HOME, "/other");
 });
