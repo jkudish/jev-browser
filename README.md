@@ -188,7 +188,7 @@ console.log(result.page.content);
 
 ### Judgment transports in the library
 
-Automatic judgment-provider selection tries TypeSafe, OpenRouter, Cloudflare, Vercel, then a configured compatible endpoint. OpenAI Decisions and SubQ Decisions require explicit selection. Cloudflare serves Jev by default or Clef when selected by model name. Selection and answer validation live in the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) package. `DISCERN_PROVIDER` forces a provider; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
+Automatic judgment-provider selection tries TypeSafe, OpenRouter, Cloudflare, Vercel, then a configured compatible endpoint. OpenAI Decisions and SubQ Decisions require explicit selection. Cloudflare serves Jev by default or Clef when selected by model name. Selection and answer validation live in the shared [@jkudish/discern-sdk](https://github.com/jkudish/discern-sdk) package. `DISCERN_PROVIDER` forces a provider; an unknown name or missing credential is an error. This is separate from the typing model. Library callers can provide a transport instead, bypassing judgment provider detection without changing typing configuration:
 
 ```ts
 import { navigate, type DiscernTransport } from "@jkudish/discern-browser";
@@ -466,7 +466,7 @@ With no provider at all, or when the typing model fails or returns empty text, t
 
 ### Providers
 
-Judgments ride on the shared [@jkudish/discern-agent-tools](https://github.com/jkudish/discern-agent-tools) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Automatic selection tries these carriers in order:
+Judgments ride on the shared [@jkudish/discern-sdk](https://github.com/jkudish/discern-sdk) wire package. It picks a carrier from your environment, sends the judgment, and validates the answer before any action runs. Automatic selection tries these carriers in order:
 
 - **TypeSafe** (`TYPESAFE_API_KEY`): direct, and the default when set.
 - **OpenRouter** (`OPENROUTER_API_KEY`): one key can also run the typing model.
@@ -490,7 +490,7 @@ The Cloudflare carrier also runs Cloudflare's own [Clef decision models](https:/
 
 `DISCERN_PROVIDER` forces one of them; an unknown name or a missing credential is a configuration error, never a silent fallback. Typing is configured separately with `DISCERN_BROWSER_TYPE_*`.
 
-The built-ins stay limited to major providers. For anything else, library callers can inject a transport ([Judgment transports in the library](#judgment-transports-in-the-library)), use a published third-party driver package, or publish their own; published drivers get linked here on request. The [add-a-provider guide](https://github.com/jkudish/discern-agent-tools#adding-a-provider) covers all three paths.
+The built-ins stay limited to major providers. For anything else, library callers can inject a transport ([Judgment transports in the library](#judgment-transports-in-the-library)), use a published third-party driver package, or publish their own; published drivers get linked here on request. The [add-a-provider guide](https://github.com/jkudish/discern-sdk#adding-a-provider) covers all three paths.
 
 | Env var | Default | Purpose |
 | --- | --- | --- |

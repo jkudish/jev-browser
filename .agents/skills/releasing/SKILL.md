@@ -37,7 +37,7 @@ mechanical and exact.
 
 - `@jkudish/discern-browser` is a brand-new package, so 1.0.0 is published
   interactively by Joey (see below), not staged.
-- Release `@jkudish/discern-agent-tools` 1.0.0 first, then refresh this
+- Release `@jkudish/discern-sdk` 1.0.0 first, then refresh this
   package's lockfile against the registry (`npm install --package-lock-only`)
   so `npm ci` passes, then release this package.
 - Then publish the compatibility package `@jkudish/jev-browser` 1.0.0 from

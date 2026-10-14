@@ -69,18 +69,18 @@ body { width: ${width}px; height: ${height}px; background: ${BG}; color: ${FG}; 
 //   task "Open the Wikipedia article for Espresso, then open its section about the
 //   history of espresso, and stop there." -> click_e28 1.00, click_e6 0.46,
 //   click_e7 0.77, done 0.71, status done.
-// - discern-agent-tools: ask() noul "Is a refund requested?" on "A customer asks
+// - discern-sdk: ask() noul "Is a refund requested?" on "A customer asks
 //   for a refund of a duplicate charge." -> ok, typesafe, jev-1.13.0, noul 0.99.
 const mcp = { name: "discern-mcp", nameSize: 80, tagline: "Typed judgments with calibrated probabilities, as MCP tools.",
   panel: { cmd: "discern_verify", rows: [["verdict", "verified", "ok"], ["probability", "1.00"], ["confidence", "1.00"], ["action", "auto"]] } };
 const browser = { name: "discern-browser", nameSize: 60, tagline: "A browser agent driven by typed judgments.",
   panel: { cmd: "discern_navigate", rows: [["1 click_e28", "1.00"], ["2 click_e6", "0.46"], ["3 click_e7", "0.77"], ["4 done", "0.71"], ["status", "done", "ok"]] } };
 
-const agentTools = { name: "discern-agent-tools", nameSize: 52, tagline: "One validated ask() across judgment providers.",
+const sdk = { name: "discern-sdk", nameSize: 80, tagline: "One validated ask() across judgment providers.",
   panel: { cmd: "ask(input)", rows: [["ok", "true", "ok"], ["provider", "typesafe"], ["model", "jev-1.13.0"], ["noul", "0.99"]] } };
 
 // Every repository gets a README banner and a GitHub social card.
-const assets = [mcp, browser, agentTools].flatMap((spec) => [
+const assets = [mcp, browser, sdk].flatMap((spec) => [
   [`${spec.name}-banner.png`, { width: 1270, height: 760, ...spec }],
   [`${spec.name}-og.png`, { width: 1280, height: 640, ...spec }],
 ]);

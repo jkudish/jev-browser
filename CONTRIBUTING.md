@@ -10,7 +10,7 @@ npm run build
 npm run typecheck
 ```
 
-Node.js 22 or newer. TypeScript, ESM. Playwright drives the browser; the Vercel AI SDK drives the typing generator (any provider); [`@jkudish/discern-agent-tools`](https://github.com/jkudish/discern-agent-tools) sends and validates the judgments.
+Node.js 22 or newer. TypeScript, ESM. Playwright drives the browser; the Vercel AI SDK drives the typing generator (any provider); [`@jkudish/discern-sdk`](https://github.com/jkudish/discern-sdk) sends and validates the judgments.
 
 ## Tests
 

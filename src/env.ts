@@ -1,10 +1,10 @@
 // Environment for discern-browser 1.x. Each variable in BROWSER_ENV_NAMES has
-// a legacy JEV_<X> alias of DISCERN_<X> (normalizeDiscernEnv from discern-agent-tools owns the
+// a legacy JEV_<X> alias of DISCERN_<X> (normalizeDiscernEnv from discern-sdk owns the
 // rule: DISCERN_ wins, a JEV_ name alone is copied over, two different
 // non-empty values are a configuration error naming both variables and never
 // their values). After normalization this package reads only DISCERN_ names.
 // JEV_ names stop working in 2.0.
-import { DISCERN_ENV_NAMES, normalizeDiscernEnv } from "@jkudish/discern-agent-tools";
+import { DISCERN_ENV_NAMES, normalizeDiscernEnv } from "@jkudish/discern-sdk";
 
 export type Env = Record<string, string | undefined>;
 

@@ -1,5 +1,5 @@
-import { ask, resolveTransport } from "@jkudish/discern-agent-tools";
-import type { DiscernAnswer, DiscernTransport, DiscernTransportInput, DiscernTransportReply } from "@jkudish/discern-agent-tools";
+import { ask, resolveTransport } from "@jkudish/discern-sdk";
+import type { DiscernAnswer, DiscernTransport, DiscernTransportInput, DiscernTransportReply } from "@jkudish/discern-sdk";
 
 export { resolveTransport };
 export type { DiscernAnswer, DiscernTransport, DiscernTransportInput, DiscernTransportReply };
