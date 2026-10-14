@@ -143,7 +143,7 @@ test("OpenRouter maps latest and pinned slugs, sends exact envelope and redacts 
     assert.equal((await askJudgment(transport, { ...input, model: "~typesafe/jev-latest" })).model, "~typesafe/jev-latest");
     assert.equal(calls[0].url, "https://openrouter.ai/api/alpha/decisions");
     assert.equal(calls[0].init.method, "POST");
-    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/discern-agent-tools", "X-Title": "discern", "X-OpenRouter-Title": "discern" });
+    assert.deepEqual(calls[0].init.headers, { Authorization: "Bearer sk-or-secret", "Content-Type": "application/json", "HTTP-Referer": "https://github.com/jkudish/discern-sdk", "X-Title": "discern", "X-OpenRouter-Title": "discern" });
     assert.ok(calls[0].init.signal instanceof AbortSignal && !calls[0].init.signal.aborted);
     assert.deepEqual(JSON.parse(calls[0].init.body), { model: "~typesafe/jev-latest", state: input.state, questions });
     assert.deepEqual(calls.map((call) => JSON.parse(call.init.body).model), ["~typesafe/jev-latest", "typesafe/jev-1.12", "~typesafe/jev-latest"]);
@@ -454,7 +454,7 @@ test("transport failures, including the deadline, are run errors rather than inv
     await assert.rejects(() => askJudgment(failing, input), (error) => !(error instanceof InvalidJudgmentAnswer) && /HTTP/.test(error.message));
   }
   const hanging = { name: "fixture", ask: (request) => new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason))) };
-  const { ask } = await import("@jkudish/discern-agent-tools");
+  const { ask } = await import("@jkudish/discern-sdk");
   const result = await ask({ ...input, signal: new AbortController().signal }, { transport: hanging, timeoutMs: 20 });
   assert.equal(result.code, "timeout");
 });

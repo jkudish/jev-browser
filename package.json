@@ -62,7 +62,7 @@
     "@ai-sdk/google": "^4.0.95",
     "@ai-sdk/openai": "^4.0.93",
     "@ai-sdk/openai-compatible": "^3.0.68",
-    "@jkudish/discern-agent-tools": "^1.0.0",
+    "@jkudish/discern-sdk": "^1.0.0",
     "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/server": "^2.4.0",
     "@typesafe-ai/sdk": "^0.6.0",

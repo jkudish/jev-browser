@@ -21,7 +21,7 @@ Renamed from `@jkudish/jev-browser` to `@jkudish/discern-browser`, because the p
 - Cloudflare's Clef with `DISCERN_PROVIDER=cloudflare` and `DISCERN_BROWSER_MODEL=clef` or `clef-flash`.
 - The System One-compatible endpoint (`DISCERN_API_KEY` and `DISCERN_API_BASE_URL`) is available as a carrier.
 - The default judgment model is the neutral `latest` (Jev on Jev carriers, `gpt-6-luna` on OpenAI); `jev-latest` keeps working.
-- Every carrier gets the shared retries, a 60-second deadline, and a response-size ceiling from `@jkudish/discern-agent-tools` 1.0.
+- Every carrier gets the shared retries, a 60-second deadline, and a response-size ceiling from `@jkudish/discern-sdk` 1.0.
 - Cost estimates use the answering carrier's input price.
 - Rate limits, provider outages, configuration errors, and the deadline are reported as run errors, not as invalid judgment answers.
 
