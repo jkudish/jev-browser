@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.8
+
+- Updated typing-provider dependencies and Playwright, including its cross-origin redirect fix.
+
 ## 0.8.7
 
 - Updated AI SDK typing-provider and Zod dependencies.
