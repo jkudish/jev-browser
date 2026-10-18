@@ -1,0 +1,28 @@
+benchmark: 26 attempts scheduled (local, mock-random); writing /Users/mikekaranja/Projects/tools/browser-automation/jev-browser/benchmarks/results/validate-mock-random-1
+000-nav-new-tab-headed status=max_steps verified=false category=agent_max_steps task_ms=3650 steps=10 spent=$0.0000
+001-nav-new-tab-headless status=max_steps verified=false category=agent_max_steps task_ms=3163 steps=10 spent=$0.0000
+002-delayed-content-headed status=max_steps verified=false category=agent_max_steps task_ms=3444 steps=10 spent=$0.0000
+003-delayed-content-headless status=max_steps verified=false category=agent_max_steps task_ms=3588 steps=10 spent=$0.0000
+004-form-no-submit-headed status=max_steps verified=false category=typing_unavailable task_ms=4112 steps=12 spent=$0.0000
+005-form-no-submit-headless status=max_steps verified=false category=agent_max_steps task_ms=4454 steps=12 spent=$0.0000
+006-dropdowns-headless status=max_steps verified=false category=agent_max_steps task_ms=2712 steps=8 spent=$0.0000
+007-dropdowns-headed status=max_steps verified=false category=agent_max_steps task_ms=2715 steps=8 spent=$0.0000
+008-search-keyboard-headless status=max_steps verified=false category=agent_max_steps task_ms=3402 steps=10 spent=$0.0000
+009-search-keyboard-headed status=max_steps verified=false category=agent_max_steps task_ms=3370 steps=10 spent=$0.0000
+010-pagination-headless status=max_steps verified=false category=agent_max_steps task_ms=3490 steps=10 spent=$0.0000
+011-pagination-headed status=max_steps verified=false category=agent_max_steps task_ms=3743 steps=10 spent=$0.0000
+012-nav-new-tab-headed status=max_steps verified=false category=agent_max_steps task_ms=3421 steps=10 spent=$0.0000
+013-nav-new-tab-headless status=max_steps verified=false category=agent_max_steps task_ms=3496 steps=10 spent=$0.0000
+014-ambiguous-save-headed status=max_steps verified=false category=agent_max_steps task_ms=2801 steps=8 spent=$0.0000
+015-ambiguous-save-headless status=max_steps verified=false category=agent_max_steps task_ms=2701 steps=8 spent=$0.0000
+016-stop-before-submit-headless status=max_steps verified=false category=agent_max_steps task_ms=3223 steps=10 spent=$0.0000
+017-stop-before-submit-headed status=max_steps verified=false category=agent_max_steps task_ms=3510 steps=10 spent=$0.0000
+018-offscreen-lazy-headless status=max_steps verified=false category=agent_max_steps task_ms=4055 steps=12 spent=$0.0000
+019-offscreen-lazy-headed status=max_steps verified=false category=agent_max_steps task_ms=3316 steps=12 spent=$0.0000
+020-extract-annual-price-headless status=max_steps verified=false category=agent_max_steps task_ms=2641 steps=8 spent=$0.0000
+021-extract-annual-price-headed status=max_steps verified=false category=agent_max_steps task_ms=2831 steps=8 spent=$0.0000
+022-filter-sort-headed status=max_steps verified=false category=agent_max_steps task_ms=2736 steps=8 spent=$0.0000
+023-filter-sort-headless status=max_steps verified=false category=agent_max_steps task_ms=2785 steps=8 spent=$0.0000
+024-unavailable-target-headless status=max_steps verified=true category=pass task_ms=3192 steps=10 spent=$0.0000
+025-unavailable-target-headed status=max_steps verified=true category=pass task_ms=2837 steps=10 spent=$0.0000
+benchmark: schedule complete; 0 unexecuted; spent≈$0.0000

@@ -1,0 +1,192 @@
+{
+ "label": "synthetic-local, real Jev loop",
+ "stop": {
+  "stop_reason": "schedule complete",
+  "spent_usd_estimate": 0.0011018879999999997,
+  "unexecuted": []
+ },
+ "all_phases_ledger": {
+  "outbound_requests": 22,
+  "settled_usd_est": 0.0011018879999999999,
+  "unknown_billing_requests": 0,
+  "unknown_billing_reserved_usd": 0
+ },
+ "warmups": [],
+ "overall": {
+  "attempts": 4,
+  "verified_passes": 4,
+  "completion_rate": 1,
+  "completion_wilson95": [
+   0.5100999795960008,
+   1
+  ],
+  "claimed_successes": 4,
+  "false_successes": 0,
+  "false_success_rate_of_attempts": 0,
+  "false_success_rate_of_claims": 0,
+  "failure_categories": {
+   "pass": 4
+  },
+  "task_ms_median": 4655,
+  "task_ms_p95": 5939,
+  "startup_ms_median": 471,
+  "startup_ms_p95": 489,
+  "pass_task_ms_median": 4655,
+  "executed_actions_median": 2.5,
+  "decision_steps_median": 3.5,
+  "recoveries_total": 0,
+  "action_errors_total": 0,
+  "jev_calls_total": 14,
+  "jev_http_requests_total": 14,
+  "jev_retries_total": 0,
+  "jev_input_tokens_total": 21864,
+  "typing_http_requests_total": 8,
+  "jev_cost_usd_est": 0.0009182880000000002,
+  "typing_cost_usd_est": 0.0001836,
+  "total_cost_usd_est": 0.001101888,
+  "cost_per_verified_success_usd_est": 0.000275472,
+  "degraded_runs": 0,
+  "small_sample": true
+ },
+ "by_mode": {
+  "headed": {
+   "attempts": 2,
+   "verified_passes": 2,
+   "completion_rate": 1,
+   "completion_wilson95": [
+    0.34237195288961925,
+    1
+   ],
+   "claimed_successes": 2,
+   "false_successes": 0,
+   "false_success_rate_of_attempts": 0,
+   "false_success_rate_of_claims": 0,
+   "failure_categories": {
+    "pass": 2
+   },
+   "task_ms_median": 4655,
+   "task_ms_p95": 5504,
+   "startup_ms_median": 488,
+   "startup_ms_p95": 489,
+   "pass_task_ms_median": 4655,
+   "executed_actions_median": 2.5,
+   "decision_steps_median": 3.5,
+   "recoveries_total": 0,
+   "action_errors_total": 0,
+   "jev_calls_total": 7,
+   "jev_http_requests_total": 7,
+   "jev_retries_total": 0,
+   "jev_input_tokens_total": 10932,
+   "typing_http_requests_total": 4,
+   "jev_cost_usd_est": 0.00045914400000000003,
+   "typing_cost_usd_est": 0.00009216,
+   "total_cost_usd_est": 0.0005513040000000001,
+   "cost_per_verified_success_usd_est": 0.00027565200000000004,
+   "degraded_runs": 0,
+   "small_sample": true
+  },
+  "headless": {
+   "attempts": 2,
+   "verified_passes": 2,
+   "completion_rate": 1,
+   "completion_wilson95": [
+    0.34237195288961925,
+    1
+   ],
+   "claimed_successes": 2,
+   "false_successes": 0,
+   "false_success_rate_of_attempts": 0,
+   "false_success_rate_of_claims": 0,
+   "failure_categories": {
+    "pass": 2
+   },
+   "task_ms_median": 4433.5,
+   "task_ms_p95": 5939,
+   "startup_ms_median": 423,
+   "startup_ms_p95": 455,
+   "pass_task_ms_median": 4433.5,
+   "executed_actions_median": 2.5,
+   "decision_steps_median": 3.5,
+   "recoveries_total": 0,
+   "action_errors_total": 0,
+   "jev_calls_total": 7,
+   "jev_http_requests_total": 7,
+   "jev_retries_total": 0,
+   "jev_input_tokens_total": 10932,
+   "typing_http_requests_total": 4,
+   "jev_cost_usd_est": 0.00045914400000000003,
+   "typing_cost_usd_est": 0.00009144,
+   "total_cost_usd_est": 0.000550584,
+   "cost_per_verified_success_usd_est": 0.000275292,
+   "degraded_runs": 0,
+   "small_sample": true
+  }
+ },
+ "by_case_mode": {
+  "search-keyboard": {
+   "headed": {
+    "n": 1,
+    "pass": 1,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "pass"
+    ],
+    "task_ms_median": 3806,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 1,
+    "pass": 1,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "pass"
+    ],
+    "task_ms_median": 2928,
+    "steps_median": 3
+   }
+  },
+  "form-no-submit": {
+   "headed": {
+    "n": 1,
+    "pass": 1,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "pass"
+    ],
+    "task_ms_median": 5504,
+    "steps_median": 4
+   },
+   "headless": {
+    "n": 1,
+    "pass": 1,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "pass"
+    ],
+    "task_ms_median": 5939,
+    "steps_median": 4
+   }
+  }
+ },
+ "paired": {
+  "pairs": 2,
+  "both_pass": 2,
+  "headed_only": 0,
+  "headless_only": 0,
+  "both_fail": 0,
+  "mcnemar_exact_p": null,
+  "reported_status_agreement": 1,
+  "task_ms_diff_headed_minus_headless_median": 221.5,
+  "task_ms_diff_p95_abs": 878,
+  "small_sample": true
+ },
+ "negative_controls": null
+}

@@ -1,0 +1,1368 @@
+{
+ "created_at": "2026-10-18T17:19:27.576Z",
+ "command": "--transport typesafe --paid-approved --budget-usd 1.70 --max-minutes 150 --typing openrouter --typing-price-in 0.18 --typing-price-out 0.72 --reps 5 --warmup 1 --out benchmarks/results/local-paired-1",
+ "evidence_type": "synthetic-local",
+ "repo": {
+  "commit": "78d425087d4e34f136488e559cffaf33376b4f0a",
+  "status_short": "?? .memsearch/\n?? benchmark/\n?? benchmarks/",
+  "package_version": "0.8.8"
+ },
+ "hashes": {
+  "dist/navigate.js": "6ca5dee6c1bb31a2091fa179ab0087c5507f4cdc842edf9f18ec27d02c755e0e",
+  "dist/lib.js": "cab4b4ce4cf3fbe7b72a3e50aeacb4e14065d7944c0b16f0d9e8b7b49a5aa5e0",
+  "dist/questions.js": "cdf82970db4d835b789d51fc44d403403db5b154015a95bb6442ea103c8a7e66",
+  "dist/provider.js": "9ceea2f50a0f2d74ef4a27b9773111ba8e4e673ce290501cf26c7c5d8956fecf",
+  "benchmarks/run.mjs": "4ac88e899a4cbdd78250ca558cb82a867691d52d825c8789ebe827c154579366",
+  "benchmarks/cases.mjs": "4afe79b22bc663b4d25d29975cb0b531eade3ca1c9641075a182890572102ddc",
+  "benchmarks/fixtures.mjs": "64d3bbece294482ab03151dbe88d2c947eace6c2ec61fd2fb2d10e4774ad3035",
+  "benchmarks/oracle.mjs": "5e01e75fe6ebc7d1032d5605de4fb5cad06a1391f0741554c7a8b3d9721f7689",
+  "benchmarks/report.mjs": "c232a6a83bc575a2b4ed7d3bb26501037d5966bb8fc14a95379223a726513de4"
+ },
+ "environment": {
+  "os": "macOS 27.0.1 (27.0.0)",
+  "arch": "arm64",
+  "cpu": "Apple M1",
+  "cpus": 8,
+  "memory_gb": 8,
+  "node": "v22.23.2",
+  "playwright": "1.64.1",
+  "displays": [
+   {
+    "name": "Color LCD",
+    "resolution": "1440 x 900 @ 60.00Hz",
+    "main": true
+   }
+  ],
+  "browsers": {
+   "harness_headed": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+   },
+   "harness_headless": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+   },
+   "production_default_headless": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+   },
+   "executable_path_chromium": "/Users/mikekaranja/Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  },
+  "network": "loopback fixture only; all other browser origins aborted"
+ },
+ "configuration": {
+  "suite": "local",
+  "modes": [
+   "headed",
+   "headless"
+  ],
+  "transport": "typesafe",
+  "jev_model_requested": "jev-1.13.0",
+  "typing": {
+   "provider": "openrouter",
+   "model": "google/gemini-2.5-flash-lite",
+   "price_per_mtok": {
+    "in": 0.18,
+    "out": 0.72
+   },
+   "price_source": "operator-supplied at approval"
+  },
+  "browser_launch": {
+   "channel": "chromium",
+   "headless_by_mode": {
+    "headed": false,
+    "headless": true
+   }
+  },
+  "context": {
+   "viewport": {
+    "width": 1024,
+    "height": 640
+   },
+   "locale": "en-US",
+   "timezoneId": "UTC",
+   "deviceScaleFactor": 1,
+   "default_timeout_ms": 8000
+  },
+  "format": "text",
+  "reps": 5,
+  "warmup_per_mode": 1,
+  "seed": 20261018,
+  "concurrency": 1,
+  "jev_price_per_mtok_in": 0.042,
+  "jev_worst_case_reservation_tokens": 65536,
+  "budget_usd": 1.7,
+  "max_minutes": 150,
+  "infra_stop_after_consecutive": 3
+ },
+ "cases": [
+  {
+   "id": "nav-new-tab",
+   "category": "navigation",
+   "difficulty": "easy",
+   "mode_sensitive": "popup/new-tab navigation",
+   "start": "/",
+   "task": "Open the store's shipping policy.",
+   "initial_state": "Home page. The shipping policy is linked only from the Help center and opens in a new tab.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "search-keyboard",
+   "category": "search",
+   "difficulty": "medium",
+   "mode_sensitive": "focus/keyboard input (results render only on an Enter keydown)",
+   "start": "/help",
+   "task": "Use the help center search to find the article about getting your money back for a return, and open it.",
+   "initial_state": "Help center with a search field. The refund article is reachable only through search results.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "extract-annual-price",
+   "category": "extraction",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/pricing",
+   "task": "Find the price of the Team subscription when it is billed annually, and stop on the page that shows it.",
+   "initial_state": "Pricing page showing monthly prices; annual prices appear only after selecting the Annual billing tab.",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "form-no-submit",
+   "category": "multi-field form without submission",
+   "difficulty": "hard",
+   "mode_sensitive": "focus/keyboard input",
+   "start": "/contact",
+   "task": "Fill in the contact form with the name Ada Lovelace, the email ada@example.com, and the message: Please call me back on Tuesday. Leave the order number empty and do not send the form.",
+   "initial_state": "Empty contact form with name, email, optional order number, message, and a Send button.",
+   "limits": {
+    "maxSteps": 12,
+    "maxSeconds": 120
+   },
+   "needs_typing": true
+  },
+  {
+   "id": "dropdowns",
+   "category": "dropdowns",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/shipping-estimator",
+   "task": "In the shipping estimator, get the estimate for Express delivery to Kenya. Do not save it as a default.",
+   "initial_state": "Two native selects: country (24 options plus a placeholder) and delivery speed (Standard selected).",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "filter-sort",
+   "category": "filtering/sorting",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/shop",
+   "task": "Show only grinders, sorted by price from lowest to highest.",
+   "initial_state": "Product table with all 11 products, no category filter, unsorted.",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "pagination",
+   "category": "pagination",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/orders",
+   "task": "Open the details of order A-1022.",
+   "initial_state": "Orders list page 1 of 5 (newest first, 10 per page); A-1022 is on page 3.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "delayed-content",
+   "category": "delayed content",
+   "difficulty": "medium",
+   "mode_sensitive": "delayed rendering (list appears 3 s after load)",
+   "start": "/reports",
+   "task": "Open the Q3 2026 sales summary report.",
+   "initial_state": "Reports page shows 'Loading reports…' for 3 seconds before the report links render.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "ambiguous-save",
+   "category": "ambiguous controls",
+   "difficulty": "hard",
+   "mode_sensitive": null,
+   "start": "/settings",
+   "task": "Turn on email alerts for new invoices and save the notification preferences. Leave everything else as it is.",
+   "initial_state": "Settings with a Billing form and a Notifications form; both have a button labelled exactly 'Save'. invoice=off, shipped=on, news=off.",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "unavailable-target",
+   "category": "unavailable target",
+   "difficulty": "hard",
+   "mode_sensitive": null,
+   "start": "/shop",
+   "task": "Add the Moka Express in Midnight Blue to the cart.",
+   "initial_state": "Shop list. The Moka Express exists but only in Silver and Red; Midnight Blue does not exist.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "stop-before-submit",
+   "category": "stop-before-submit",
+   "difficulty": "hard",
+   "mode_sensitive": null,
+   "start": "/cart",
+   "task": "Go through checkout up to the final order review step, then stop. Do not place the order.",
+   "initial_state": "Cart with one kettle. Checkout: cart → shipping form (GET submit) → review page with a 'Place order' button.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "offscreen-lazy",
+   "category": "scrolling to offscreen controls",
+   "difficulty": "medium",
+   "mode_sensitive": "scrolling (the target link renders only when the page bottom enters the viewport)",
+   "start": "/product/stagg-kettle",
+   "task": "From this product page, open the page for registering the product's warranty.",
+   "initial_state": "Long product page; the warranty registration link is added by an IntersectionObserver at the bottom.",
+   "limits": {
+    "maxSteps": 12,
+    "maxSeconds": 100
+   },
+   "needs_typing": false
+  }
+ ],
+ "schedule": [
+  {
+   "index": 0,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 0,
+   "warmup": true,
+   "pair": null,
+   "seed": 20261018
+  },
+  {
+   "index": 1,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 0,
+   "warmup": true,
+   "pair": null,
+   "seed": 20261019
+  },
+  {
+   "index": 2,
+   "case": "delayed-content",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p1",
+   "seed": 20261020
+  },
+  {
+   "index": 3,
+   "case": "delayed-content",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p1",
+   "seed": 20261021
+  },
+  {
+   "index": 4,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p2",
+   "seed": 20261022
+  },
+  {
+   "index": 5,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p2",
+   "seed": 20261023
+  },
+  {
+   "index": 6,
+   "case": "dropdowns",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p3",
+   "seed": 20261024
+  },
+  {
+   "index": 7,
+   "case": "dropdowns",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p3",
+   "seed": 20261025
+  },
+  {
+   "index": 8,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p4",
+   "seed": 20261026
+  },
+  {
+   "index": 9,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p4",
+   "seed": 20261027
+  },
+  {
+   "index": 10,
+   "case": "pagination",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p5",
+   "seed": 20261028
+  },
+  {
+   "index": 11,
+   "case": "pagination",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p5",
+   "seed": 20261029
+  },
+  {
+   "index": 12,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p6",
+   "seed": 20261030
+  },
+  {
+   "index": 13,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p6",
+   "seed": 20261031
+  },
+  {
+   "index": 14,
+   "case": "ambiguous-save",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p7",
+   "seed": 20261032
+  },
+  {
+   "index": 15,
+   "case": "ambiguous-save",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p7",
+   "seed": 20261033
+  },
+  {
+   "index": 16,
+   "case": "stop-before-submit",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p8",
+   "seed": 20261034
+  },
+  {
+   "index": 17,
+   "case": "stop-before-submit",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p8",
+   "seed": 20261035
+  },
+  {
+   "index": 18,
+   "case": "offscreen-lazy",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p9",
+   "seed": 20261036
+  },
+  {
+   "index": 19,
+   "case": "offscreen-lazy",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p9",
+   "seed": 20261037
+  },
+  {
+   "index": 20,
+   "case": "extract-annual-price",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p10",
+   "seed": 20261038
+  },
+  {
+   "index": 21,
+   "case": "extract-annual-price",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p10",
+   "seed": 20261039
+  },
+  {
+   "index": 22,
+   "case": "filter-sort",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p11",
+   "seed": 20261040
+  },
+  {
+   "index": 23,
+   "case": "filter-sort",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p11",
+   "seed": 20261041
+  },
+  {
+   "index": 24,
+   "case": "unavailable-target",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p12",
+   "seed": 20261042
+  },
+  {
+   "index": 25,
+   "case": "unavailable-target",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p12",
+   "seed": 20261043
+  },
+  {
+   "index": 26,
+   "case": "stop-before-submit",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p13",
+   "seed": 20261044
+  },
+  {
+   "index": 27,
+   "case": "stop-before-submit",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p13",
+   "seed": 20261045
+  },
+  {
+   "index": 28,
+   "case": "unavailable-target",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p14",
+   "seed": 20261046
+  },
+  {
+   "index": 29,
+   "case": "unavailable-target",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p14",
+   "seed": 20261047
+  },
+  {
+   "index": 30,
+   "case": "delayed-content",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p15",
+   "seed": 20261048
+  },
+  {
+   "index": 31,
+   "case": "delayed-content",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p15",
+   "seed": 20261049
+  },
+  {
+   "index": 32,
+   "case": "offscreen-lazy",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p16",
+   "seed": 20261050
+  },
+  {
+   "index": 33,
+   "case": "offscreen-lazy",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p16",
+   "seed": 20261051
+  },
+  {
+   "index": 34,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p17",
+   "seed": 20261052
+  },
+  {
+   "index": 35,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p17",
+   "seed": 20261053
+  },
+  {
+   "index": 36,
+   "case": "extract-annual-price",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p18",
+   "seed": 20261054
+  },
+  {
+   "index": 37,
+   "case": "extract-annual-price",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p18",
+   "seed": 20261055
+  },
+  {
+   "index": 38,
+   "case": "ambiguous-save",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p19",
+   "seed": 20261056
+  },
+  {
+   "index": 39,
+   "case": "ambiguous-save",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p19",
+   "seed": 20261057
+  },
+  {
+   "index": 40,
+   "case": "dropdowns",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p20",
+   "seed": 20261058
+  },
+  {
+   "index": 41,
+   "case": "dropdowns",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p20",
+   "seed": 20261059
+  },
+  {
+   "index": 42,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p21",
+   "seed": 20261060
+  },
+  {
+   "index": 43,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p21",
+   "seed": 20261061
+  },
+  {
+   "index": 44,
+   "case": "pagination",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p22",
+   "seed": 20261062
+  },
+  {
+   "index": 45,
+   "case": "pagination",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p22",
+   "seed": 20261063
+  },
+  {
+   "index": 46,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p23",
+   "seed": 20261064
+  },
+  {
+   "index": 47,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p23",
+   "seed": 20261065
+  },
+  {
+   "index": 48,
+   "case": "filter-sort",
+   "mode": "headed",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p24",
+   "seed": 20261066
+  },
+  {
+   "index": 49,
+   "case": "filter-sort",
+   "mode": "headless",
+   "rep": 2,
+   "warmup": false,
+   "pair": "p24",
+   "seed": 20261067
+  },
+  {
+   "index": 50,
+   "case": "pagination",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p25",
+   "seed": 20261068
+  },
+  {
+   "index": 51,
+   "case": "pagination",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p25",
+   "seed": 20261069
+  },
+  {
+   "index": 52,
+   "case": "ambiguous-save",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p26",
+   "seed": 20261070
+  },
+  {
+   "index": 53,
+   "case": "ambiguous-save",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p26",
+   "seed": 20261071
+  },
+  {
+   "index": 54,
+   "case": "stop-before-submit",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p27",
+   "seed": 20261072
+  },
+  {
+   "index": 55,
+   "case": "stop-before-submit",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p27",
+   "seed": 20261073
+  },
+  {
+   "index": 56,
+   "case": "extract-annual-price",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p28",
+   "seed": 20261074
+  },
+  {
+   "index": 57,
+   "case": "extract-annual-price",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p28",
+   "seed": 20261075
+  },
+  {
+   "index": 58,
+   "case": "unavailable-target",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p29",
+   "seed": 20261076
+  },
+  {
+   "index": 59,
+   "case": "unavailable-target",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p29",
+   "seed": 20261077
+  },
+  {
+   "index": 60,
+   "case": "offscreen-lazy",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p30",
+   "seed": 20261078
+  },
+  {
+   "index": 61,
+   "case": "offscreen-lazy",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p30",
+   "seed": 20261079
+  },
+  {
+   "index": 62,
+   "case": "dropdowns",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p31",
+   "seed": 20261080
+  },
+  {
+   "index": 63,
+   "case": "dropdowns",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p31",
+   "seed": 20261081
+  },
+  {
+   "index": 64,
+   "case": "filter-sort",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p32",
+   "seed": 20261082
+  },
+  {
+   "index": 65,
+   "case": "filter-sort",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p32",
+   "seed": 20261083
+  },
+  {
+   "index": 66,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p33",
+   "seed": 20261084
+  },
+  {
+   "index": 67,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p33",
+   "seed": 20261085
+  },
+  {
+   "index": 68,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p34",
+   "seed": 20261086
+  },
+  {
+   "index": 69,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p34",
+   "seed": 20261087
+  },
+  {
+   "index": 70,
+   "case": "delayed-content",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p35",
+   "seed": 20261088
+  },
+  {
+   "index": 71,
+   "case": "delayed-content",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p35",
+   "seed": 20261089
+  },
+  {
+   "index": 72,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p36",
+   "seed": 20261090
+  },
+  {
+   "index": 73,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 3,
+   "warmup": false,
+   "pair": "p36",
+   "seed": 20261091
+  },
+  {
+   "index": 74,
+   "case": "unavailable-target",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p37",
+   "seed": 20261092
+  },
+  {
+   "index": 75,
+   "case": "unavailable-target",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p37",
+   "seed": 20261093
+  },
+  {
+   "index": 76,
+   "case": "extract-annual-price",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p38",
+   "seed": 20261094
+  },
+  {
+   "index": 77,
+   "case": "extract-annual-price",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p38",
+   "seed": 20261095
+  },
+  {
+   "index": 78,
+   "case": "dropdowns",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p39",
+   "seed": 20261096
+  },
+  {
+   "index": 79,
+   "case": "dropdowns",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p39",
+   "seed": 20261097
+  },
+  {
+   "index": 80,
+   "case": "filter-sort",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p40",
+   "seed": 20261098
+  },
+  {
+   "index": 81,
+   "case": "filter-sort",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p40",
+   "seed": 20261099
+  },
+  {
+   "index": 82,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p41",
+   "seed": 20261100
+  },
+  {
+   "index": 83,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p41",
+   "seed": 20261101
+  },
+  {
+   "index": 84,
+   "case": "ambiguous-save",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p42",
+   "seed": 20261102
+  },
+  {
+   "index": 85,
+   "case": "ambiguous-save",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p42",
+   "seed": 20261103
+  },
+  {
+   "index": 86,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p43",
+   "seed": 20261104
+  },
+  {
+   "index": 87,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p43",
+   "seed": 20261105
+  },
+  {
+   "index": 88,
+   "case": "offscreen-lazy",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p44",
+   "seed": 20261106
+  },
+  {
+   "index": 89,
+   "case": "offscreen-lazy",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p44",
+   "seed": 20261107
+  },
+  {
+   "index": 90,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p45",
+   "seed": 20261108
+  },
+  {
+   "index": 91,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p45",
+   "seed": 20261109
+  },
+  {
+   "index": 92,
+   "case": "delayed-content",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p46",
+   "seed": 20261110
+  },
+  {
+   "index": 93,
+   "case": "delayed-content",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p46",
+   "seed": 20261111
+  },
+  {
+   "index": 94,
+   "case": "pagination",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p47",
+   "seed": 20261112
+  },
+  {
+   "index": 95,
+   "case": "pagination",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p47",
+   "seed": 20261113
+  },
+  {
+   "index": 96,
+   "case": "stop-before-submit",
+   "mode": "headless",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p48",
+   "seed": 20261114
+  },
+  {
+   "index": 97,
+   "case": "stop-before-submit",
+   "mode": "headed",
+   "rep": 4,
+   "warmup": false,
+   "pair": "p48",
+   "seed": 20261115
+  },
+  {
+   "index": 98,
+   "case": "dropdowns",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p49",
+   "seed": 20261116
+  },
+  {
+   "index": 99,
+   "case": "dropdowns",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p49",
+   "seed": 20261117
+  },
+  {
+   "index": 100,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p50",
+   "seed": 20261118
+  },
+  {
+   "index": 101,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p50",
+   "seed": 20261119
+  },
+  {
+   "index": 102,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p51",
+   "seed": 20261120
+  },
+  {
+   "index": 103,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p51",
+   "seed": 20261121
+  },
+  {
+   "index": 104,
+   "case": "unavailable-target",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p52",
+   "seed": 20261122
+  },
+  {
+   "index": 105,
+   "case": "unavailable-target",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p52",
+   "seed": 20261123
+  },
+  {
+   "index": 106,
+   "case": "offscreen-lazy",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p53",
+   "seed": 20261124
+  },
+  {
+   "index": 107,
+   "case": "offscreen-lazy",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p53",
+   "seed": 20261125
+  },
+  {
+   "index": 108,
+   "case": "stop-before-submit",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p54",
+   "seed": 20261126
+  },
+  {
+   "index": 109,
+   "case": "stop-before-submit",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p54",
+   "seed": 20261127
+  },
+  {
+   "index": 110,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p55",
+   "seed": 20261128
+  },
+  {
+   "index": 111,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p55",
+   "seed": 20261129
+  },
+  {
+   "index": 112,
+   "case": "pagination",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p56",
+   "seed": 20261130
+  },
+  {
+   "index": 113,
+   "case": "pagination",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p56",
+   "seed": 20261131
+  },
+  {
+   "index": 114,
+   "case": "delayed-content",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p57",
+   "seed": 20261132
+  },
+  {
+   "index": 115,
+   "case": "delayed-content",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p57",
+   "seed": 20261133
+  },
+  {
+   "index": 116,
+   "case": "filter-sort",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p58",
+   "seed": 20261134
+  },
+  {
+   "index": 117,
+   "case": "filter-sort",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p58",
+   "seed": 20261135
+  },
+  {
+   "index": 118,
+   "case": "extract-annual-price",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p59",
+   "seed": 20261136
+  },
+  {
+   "index": 119,
+   "case": "extract-annual-price",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p59",
+   "seed": 20261137
+  },
+  {
+   "index": 120,
+   "case": "ambiguous-save",
+   "mode": "headed",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p60",
+   "seed": 20261138
+  },
+  {
+   "index": 121,
+   "case": "ambiguous-save",
+   "mode": "headless",
+   "rep": 5,
+   "warmup": false,
+   "pair": "p60",
+   "seed": 20261139
+  }
+ ]
+}

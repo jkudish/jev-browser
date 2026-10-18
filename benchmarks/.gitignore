@@ -1,0 +1,2 @@
+# Per-attempt traces and screenshots stay local (large; contain local paths).
+results/*/traces/

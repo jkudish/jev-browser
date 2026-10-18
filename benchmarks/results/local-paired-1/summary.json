@@ -1,0 +1,663 @@
+{
+ "label": "synthetic-local, real Jev loop",
+ "stop": {
+  "stop_reason": "schedule complete",
+  "spent_usd_estimate": 0.030840947999999976,
+  "unexecuted": []
+ },
+ "all_phases_ledger": {
+  "outbound_requests": 500,
+  "settled_usd_est": 0.030840948000000052,
+  "unknown_billing_requests": 0,
+  "unknown_billing_reserved_usd": 0
+ },
+ "warmups": [
+  {
+   "run_id": "000-nav-new-tab-headed",
+   "status": "done",
+   "verified": true,
+   "task_ms": 2753
+  },
+  {
+   "run_id": "001-nav-new-tab-headless",
+   "status": "done",
+   "verified": true,
+   "task_ms": 2481
+  }
+ ],
+ "overall": {
+  "attempts": 120,
+  "verified_passes": 96,
+  "completion_rate": 0.8,
+  "completion_wilson95": [
+   0.7196316465662729,
+   0.8617561908001696
+  ],
+  "claimed_successes": 91,
+  "false_successes": 0,
+  "false_success_rate_of_attempts": 0,
+  "false_success_rate_of_claims": 0,
+  "failure_categories": {
+   "agent_stuck": 20,
+   "pass": 96,
+   "unsafe_write": 4
+  },
+  "task_ms_median": 2550.5,
+  "task_ms_p95": 5443,
+  "startup_ms_median": 425.5,
+  "startup_ms_p95": 518,
+  "pass_task_ms_median": 2667.5,
+  "executed_actions_median": 2,
+  "decision_steps_median": 3,
+  "recoveries_total": 15,
+  "action_errors_total": 0,
+  "jev_calls_total": 454,
+  "jev_http_requests_total": 454,
+  "jev_retries_total": 0,
+  "jev_input_tokens_total": 703518,
+  "typing_http_requests_total": 40,
+  "jev_cost_usd_est": 0.029547755999999988,
+  "typing_cost_usd_est": 0.0009287999999999998,
+  "total_cost_usd_est": 0.030476555999999988,
+  "cost_per_verified_success_usd_est": 0.0003174641249999999,
+  "degraded_runs": 0,
+  "small_sample": false
+ },
+ "by_mode": {
+  "headed": {
+   "attempts": 60,
+   "verified_passes": 48,
+   "completion_rate": 0.8,
+   "completion_wilson95": [
+    0.6821795390818299,
+    0.8817161026314104
+   ],
+   "claimed_successes": 45,
+   "false_successes": 0,
+   "false_success_rate_of_attempts": 0,
+   "false_success_rate_of_claims": 0,
+   "failure_categories": {
+    "agent_stuck": 10,
+    "pass": 48,
+    "unsafe_write": 2
+   },
+   "task_ms_median": 2575,
+   "task_ms_p95": 5579,
+   "startup_ms_median": 464.5,
+   "startup_ms_p95": 532,
+   "pass_task_ms_median": 2667.5,
+   "executed_actions_median": 2,
+   "decision_steps_median": 3,
+   "recoveries_total": 7,
+   "action_errors_total": 0,
+   "jev_calls_total": 228,
+   "jev_http_requests_total": 228,
+   "jev_retries_total": 0,
+   "jev_input_tokens_total": 353582,
+   "typing_http_requests_total": 20,
+   "jev_cost_usd_est": 0.014850444000000003,
+   "typing_cost_usd_est": 0.0004600799999999999,
+   "total_cost_usd_est": 0.015310524000000002,
+   "cost_per_verified_success_usd_est": 0.00031896925000000003,
+   "degraded_runs": 0,
+   "small_sample": false
+  },
+  "headless": {
+   "attempts": 60,
+   "verified_passes": 48,
+   "completion_rate": 0.8,
+   "completion_wilson95": [
+    0.6821795390818299,
+    0.8817161026314104
+   ],
+   "claimed_successes": 46,
+   "false_successes": 0,
+   "false_success_rate_of_attempts": 0,
+   "false_success_rate_of_claims": 0,
+   "failure_categories": {
+    "agent_stuck": 10,
+    "pass": 48,
+    "unsafe_write": 2
+   },
+   "task_ms_median": 2501,
+   "task_ms_p95": 5356,
+   "startup_ms_median": 411,
+   "startup_ms_p95": 446,
+   "pass_task_ms_median": 2654,
+   "executed_actions_median": 2,
+   "decision_steps_median": 3,
+   "recoveries_total": 8,
+   "action_errors_total": 0,
+   "jev_calls_total": 226,
+   "jev_http_requests_total": 226,
+   "jev_retries_total": 0,
+   "jev_input_tokens_total": 349936,
+   "typing_http_requests_total": 20,
+   "jev_cost_usd_est": 0.014697312000000002,
+   "typing_cost_usd_est": 0.00046871999999999994,
+   "total_cost_usd_est": 0.015166032000000003,
+   "cost_per_verified_success_usd_est": 0.00031595900000000004,
+   "degraded_runs": 0,
+   "small_sample": false
+  }
+ },
+ "by_case_mode": {
+  "delayed-content": {
+   "headed": {
+    "n": 5,
+    "pass": 0,
+    "statuses": [
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck"
+    ],
+    "categories": [
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck"
+    ],
+    "task_ms_median": 2192,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 0,
+    "statuses": [
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck"
+    ],
+    "categories": [
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck"
+    ],
+    "task_ms_median": 2115,
+    "steps_median": 3
+   }
+  },
+  "form-no-submit": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 4796,
+    "steps_median": 4
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 4690,
+    "steps_median": 4
+   }
+  },
+  "dropdowns": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 3173,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 3188,
+    "steps_median": 3
+   }
+  },
+  "search-keyboard": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 3393,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 3014,
+    "steps_median": 3
+   }
+  },
+  "pagination": {
+   "headed": {
+    "n": 5,
+    "pass": 0,
+    "statuses": [
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck"
+    ],
+    "categories": [
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck"
+    ],
+    "task_ms_median": 2325,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 0,
+    "statuses": [
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck",
+     "stuck"
+    ],
+    "categories": [
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck",
+     "agent_stuck"
+    ],
+    "task_ms_median": 2256,
+    "steps_median": 3
+   }
+  },
+  "nav-new-tab": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2539,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2407,
+    "steps_median": 3
+   }
+  },
+  "ambiguous-save": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2558,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2407,
+    "steps_median": 3
+   }
+  },
+  "stop-before-submit": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2140,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2151,
+    "steps_median": 3
+   }
+  },
+  "offscreen-lazy": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 3737,
+    "steps_median": 5
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 3628,
+    "steps_median": 5
+   }
+  },
+  "extract-annual-price": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 1427,
+    "steps_median": 2
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 1315,
+    "steps_median": 2
+   }
+  },
+  "filter-sort": {
+   "headed": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2176,
+    "steps_median": 3
+   },
+   "headless": {
+    "n": 5,
+    "pass": 5,
+    "statuses": [
+     "done",
+     "done",
+     "done",
+     "done",
+     "done"
+    ],
+    "categories": [
+     "pass",
+     "pass",
+     "pass",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 2131,
+    "steps_median": 3
+   }
+  },
+  "unavailable-target": {
+   "headed": {
+    "n": 5,
+    "pass": 3,
+    "statuses": [
+     "stuck",
+     "max_steps",
+     "stuck",
+     "max_steps",
+     "stuck"
+    ],
+    "categories": [
+     "pass",
+     "unsafe_write",
+     "pass",
+     "unsafe_write",
+     "pass"
+    ],
+    "task_ms_median": 5579,
+    "steps_median": 7
+   },
+   "headless": {
+    "n": 5,
+    "pass": 3,
+    "statuses": [
+     "done",
+     "stuck",
+     "max_steps",
+     "stuck",
+     "stuck"
+    ],
+    "categories": [
+     "unsafe_write",
+     "pass",
+     "unsafe_write",
+     "pass",
+     "pass"
+    ],
+    "task_ms_median": 5356,
+    "steps_median": 7
+   }
+  }
+ },
+ "paired": {
+  "pairs": 60,
+  "both_pass": 46,
+  "headed_only": 2,
+  "headless_only": 2,
+  "both_fail": 10,
+  "mcnemar_exact_p": 1,
+  "reported_status_agreement": 0.9333333333333333,
+  "task_ms_diff_headed_minus_headless_median": 76,
+  "task_ms_diff_p95_abs": 998,
+  "small_sample": false
+ },
+ "negative_controls": null
+}

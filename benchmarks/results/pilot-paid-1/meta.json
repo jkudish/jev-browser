@@ -1,0 +1,166 @@
+{
+ "created_at": "2026-10-18T17:18:31.771Z",
+ "command": "--transport typesafe --paid-approved --budget-usd 0.10 --max-minutes 10 --typing openrouter --typing-price-in 0.18 --typing-price-out 0.72 --cases form-no-submit,search-keyboard --reps 1 --warmup 0 --out benchmarks/results/pilot-paid-1",
+ "evidence_type": "synthetic-local",
+ "repo": {
+  "commit": "78d425087d4e34f136488e559cffaf33376b4f0a",
+  "status_short": "?? .memsearch/\n?? benchmark/\n?? benchmarks/",
+  "package_version": "0.8.8"
+ },
+ "hashes": {
+  "dist/navigate.js": "6ca5dee6c1bb31a2091fa179ab0087c5507f4cdc842edf9f18ec27d02c755e0e",
+  "dist/lib.js": "cab4b4ce4cf3fbe7b72a3e50aeacb4e14065d7944c0b16f0d9e8b7b49a5aa5e0",
+  "dist/questions.js": "cdf82970db4d835b789d51fc44d403403db5b154015a95bb6442ea103c8a7e66",
+  "dist/provider.js": "9ceea2f50a0f2d74ef4a27b9773111ba8e4e673ce290501cf26c7c5d8956fecf",
+  "benchmarks/run.mjs": "4ac88e899a4cbdd78250ca558cb82a867691d52d825c8789ebe827c154579366",
+  "benchmarks/cases.mjs": "4afe79b22bc663b4d25d29975cb0b531eade3ca1c9641075a182890572102ddc",
+  "benchmarks/fixtures.mjs": "64d3bbece294482ab03151dbe88d2c947eace6c2ec61fd2fb2d10e4774ad3035",
+  "benchmarks/oracle.mjs": "5e01e75fe6ebc7d1032d5605de4fb5cad06a1391f0741554c7a8b3d9721f7689",
+  "benchmarks/report.mjs": "c232a6a83bc575a2b4ed7d3bb26501037d5966bb8fc14a95379223a726513de4"
+ },
+ "environment": {
+  "os": "macOS 27.0.1 (27.0.0)",
+  "arch": "arm64",
+  "cpu": "Apple M1",
+  "cpus": 8,
+  "memory_gb": 8,
+  "node": "v22.23.2",
+  "playwright": "1.64.1",
+  "displays": [
+   {
+    "name": "Color LCD",
+    "resolution": "1440 x 900 @ 60.00Hz",
+    "main": true
+   }
+  ],
+  "browsers": {
+   "harness_headed": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+   },
+   "harness_headless": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+   },
+   "production_default_headless": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+   },
+   "executable_path_chromium": "/Users/mikekaranja/Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  },
+  "network": "loopback fixture only; all other browser origins aborted"
+ },
+ "configuration": {
+  "suite": "local",
+  "modes": [
+   "headed",
+   "headless"
+  ],
+  "transport": "typesafe",
+  "jev_model_requested": "jev-1.13.0",
+  "typing": {
+   "provider": "openrouter",
+   "model": "google/gemini-2.5-flash-lite",
+   "price_per_mtok": {
+    "in": 0.18,
+    "out": 0.72
+   },
+   "price_source": "operator-supplied at approval"
+  },
+  "browser_launch": {
+   "channel": "chromium",
+   "headless_by_mode": {
+    "headed": false,
+    "headless": true
+   }
+  },
+  "context": {
+   "viewport": {
+    "width": 1024,
+    "height": 640
+   },
+   "locale": "en-US",
+   "timezoneId": "UTC",
+   "deviceScaleFactor": 1,
+   "default_timeout_ms": 8000
+  },
+  "format": "text",
+  "reps": 1,
+  "warmup_per_mode": 0,
+  "seed": 20261018,
+  "concurrency": 1,
+  "jev_price_per_mtok_in": 0.042,
+  "jev_worst_case_reservation_tokens": 65536,
+  "budget_usd": 0.1,
+  "max_minutes": 10,
+  "infra_stop_after_consecutive": 3
+ },
+ "cases": [
+  {
+   "id": "search-keyboard",
+   "category": "search",
+   "difficulty": "medium",
+   "mode_sensitive": "focus/keyboard input (results render only on an Enter keydown)",
+   "start": "/help",
+   "task": "Use the help center search to find the article about getting your money back for a return, and open it.",
+   "initial_state": "Help center with a search field. The refund article is reachable only through search results.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "form-no-submit",
+   "category": "multi-field form without submission",
+   "difficulty": "hard",
+   "mode_sensitive": "focus/keyboard input",
+   "start": "/contact",
+   "task": "Fill in the contact form with the name Ada Lovelace, the email ada@example.com, and the message: Please call me back on Tuesday. Leave the order number empty and do not send the form.",
+   "initial_state": "Empty contact form with name, email, optional order number, message, and a Send button.",
+   "limits": {
+    "maxSteps": 12,
+    "maxSeconds": 120
+   },
+   "needs_typing": true
+  }
+ ],
+ "schedule": [
+  {
+   "index": 0,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p1",
+   "seed": 20261018
+  },
+  {
+   "index": 1,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p1",
+   "seed": 20261019
+  },
+  {
+   "index": 2,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p2",
+   "seed": 20261020
+  },
+  {
+   "index": 3,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p2",
+   "seed": 20261021
+  }
+ ]
+}

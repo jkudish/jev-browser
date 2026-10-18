@@ -1,0 +1,465 @@
+{
+ "label": "synthetic-local, harness validation only (mock-done); not a measurement of Jev",
+ "stop": {
+  "stop_reason": "schedule complete",
+  "spent_usd_estimate": 0,
+  "unexecuted": []
+ },
+ "all_phases_ledger": {
+  "outbound_requests": 0,
+  "settled_usd_est": 0,
+  "unknown_billing_requests": 0,
+  "unknown_billing_reserved_usd": 0
+ },
+ "warmups": [
+  {
+   "run_id": "000-nav-new-tab-headed",
+   "status": "done",
+   "verified": false,
+   "task_ms": 350
+  },
+  {
+   "run_id": "001-nav-new-tab-headless",
+   "status": "done",
+   "verified": false,
+   "task_ms": 163
+  }
+ ],
+ "overall": {
+  "attempts": 24,
+  "verified_passes": 0,
+  "completion_rate": 0,
+  "completion_wilson95": [
+   0,
+   0.13798057582897535
+  ],
+  "claimed_successes": 24,
+  "false_successes": 24,
+  "false_success_rate_of_attempts": 1,
+  "false_success_rate_of_claims": 1,
+  "failure_categories": {
+   "false_success": 24
+  },
+  "task_ms_median": 166.5,
+  "task_ms_p95": 711,
+  "startup_ms_median": 548,
+  "startup_ms_p95": 835,
+  "pass_task_ms_median": null,
+  "executed_actions_median": 0,
+  "decision_steps_median": 1,
+  "recoveries_total": 0,
+  "action_errors_total": 0,
+  "jev_calls_total": 24,
+  "jev_http_requests_total": 0,
+  "jev_retries_total": 0,
+  "jev_input_tokens_total": null,
+  "typing_http_requests_total": 0,
+  "jev_cost_usd_est": 0,
+  "typing_cost_usd_est": 0,
+  "total_cost_usd_est": 0,
+  "cost_per_verified_success_usd_est": null,
+  "degraded_runs": 0,
+  "small_sample": true
+ },
+ "by_mode": {
+  "headed": {
+   "attempts": 12,
+   "verified_passes": 0,
+   "completion_rate": 0,
+   "completion_wilson95": [
+    0,
+    0.2425007574992425
+   ],
+   "claimed_successes": 12,
+   "false_successes": 12,
+   "false_success_rate_of_attempts": 1,
+   "false_success_rate_of_claims": 1,
+   "failure_categories": {
+    "false_success": 12
+   },
+   "task_ms_median": 210.5,
+   "task_ms_p95": 777,
+   "startup_ms_median": 632.5,
+   "startup_ms_p95": 835,
+   "pass_task_ms_median": null,
+   "executed_actions_median": 0,
+   "decision_steps_median": 1,
+   "recoveries_total": 0,
+   "action_errors_total": 0,
+   "jev_calls_total": 12,
+   "jev_http_requests_total": 0,
+   "jev_retries_total": 0,
+   "jev_input_tokens_total": null,
+   "typing_http_requests_total": 0,
+   "jev_cost_usd_est": 0,
+   "typing_cost_usd_est": 0,
+   "total_cost_usd_est": 0,
+   "cost_per_verified_success_usd_est": null,
+   "degraded_runs": 0,
+   "small_sample": true
+  },
+  "headless": {
+   "attempts": 12,
+   "verified_passes": 0,
+   "completion_rate": 0,
+   "completion_wilson95": [
+    0,
+    0.2425007574992425
+   ],
+   "claimed_successes": 12,
+   "false_successes": 12,
+   "false_success_rate_of_attempts": 1,
+   "false_success_rate_of_claims": 1,
+   "failure_categories": {
+    "false_success": 12
+   },
+   "task_ms_median": 122,
+   "task_ms_p95": 178,
+   "startup_ms_median": 499.5,
+   "startup_ms_p95": 915,
+   "pass_task_ms_median": null,
+   "executed_actions_median": 0,
+   "decision_steps_median": 1,
+   "recoveries_total": 0,
+   "action_errors_total": 0,
+   "jev_calls_total": 12,
+   "jev_http_requests_total": 0,
+   "jev_retries_total": 0,
+   "jev_input_tokens_total": null,
+   "typing_http_requests_total": 0,
+   "jev_cost_usd_est": 0,
+   "typing_cost_usd_est": 0,
+   "total_cost_usd_est": 0,
+   "cost_per_verified_success_usd_est": null,
+   "degraded_runs": 0,
+   "small_sample": true
+  }
+ },
+ "by_case_mode": {
+  "delayed-content": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 209,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 119,
+    "steps_median": 1
+   }
+  },
+  "form-no-submit": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 777,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 122,
+    "steps_median": 1
+   }
+  },
+  "dropdowns": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 491,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 111,
+    "steps_median": 1
+   }
+  },
+  "search-keyboard": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 176,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 121,
+    "steps_median": 1
+   }
+  },
+  "pagination": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 711,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 126,
+    "steps_median": 1
+   }
+  },
+  "nav-new-tab": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 230,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 105,
+    "steps_median": 1
+   }
+  },
+  "ambiguous-save": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 207,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 122,
+    "steps_median": 1
+   }
+  },
+  "stop-before-submit": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 183,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 113,
+    "steps_median": 1
+   }
+  },
+  "offscreen-lazy": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 235,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 142,
+    "steps_median": 1
+   }
+  },
+  "extract-annual-price": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 212,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 153,
+    "steps_median": 1
+   }
+  },
+  "filter-sort": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 199,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 178,
+    "steps_median": 1
+   }
+  },
+  "unavailable-target": {
+   "headed": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 157,
+    "steps_median": 1
+   },
+   "headless": {
+    "n": 1,
+    "pass": 0,
+    "statuses": [
+     "done"
+    ],
+    "categories": [
+     "false_success"
+    ],
+    "task_ms_median": 135,
+    "steps_median": 1
+   }
+  }
+ },
+ "paired": {
+  "pairs": 12,
+  "both_pass": 0,
+  "headed_only": 0,
+  "headless_only": 0,
+  "both_fail": 12,
+  "mcnemar_exact_p": null,
+  "reported_status_agreement": 1,
+  "task_ms_diff_headed_minus_headless_median": 87.5,
+  "task_ms_diff_p95_abs": 655,
+  "small_sample": true
+ },
+ "negative_controls": null
+}

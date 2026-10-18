@@ -1,0 +1,478 @@
+{
+ "created_at": "2026-10-18T17:08:15.620Z",
+ "command": "--transport oracle --reps 1 --warmup 0 --out benchmarks/results/validate-oracle-1",
+ "evidence_type": "synthetic-local",
+ "repo": {
+  "commit": "78d425087d4e34f136488e559cffaf33376b4f0a",
+  "status_short": "?? .memsearch/\n?? benchmark/\n?? benchmarks/",
+  "package_version": "0.8.8"
+ },
+ "hashes": {
+  "dist/navigate.js": "6ca5dee6c1bb31a2091fa179ab0087c5507f4cdc842edf9f18ec27d02c755e0e",
+  "dist/lib.js": "cab4b4ce4cf3fbe7b72a3e50aeacb4e14065d7944c0b16f0d9e8b7b49a5aa5e0",
+  "dist/questions.js": "cdf82970db4d835b789d51fc44d403403db5b154015a95bb6442ea103c8a7e66",
+  "dist/provider.js": "9ceea2f50a0f2d74ef4a27b9773111ba8e4e673ce290501cf26c7c5d8956fecf",
+  "benchmarks/run.mjs": "f983cb25a0adfd45d435ced8095b27a3340b627a863245ef323071ec891dbac8",
+  "benchmarks/cases.mjs": "4afe79b22bc663b4d25d29975cb0b531eade3ca1c9641075a182890572102ddc",
+  "benchmarks/fixtures.mjs": "64d3bbece294482ab03151dbe88d2c947eace6c2ec61fd2fb2d10e4774ad3035",
+  "benchmarks/oracle.mjs": "5e01e75fe6ebc7d1032d5605de4fb5cad06a1391f0741554c7a8b3d9721f7689",
+  "benchmarks/report.mjs": "a99c74bae93303f37a1e2e31df098118927e870a3e0aff86d74abe64d8d6cff1"
+ },
+ "environment": {
+  "os": "macOS 27.0.1 (27.0.0)",
+  "arch": "arm64",
+  "cpu": "Apple M1",
+  "cpus": 8,
+  "memory_gb": 8,
+  "node": "v22.23.2",
+  "playwright": "1.64.1",
+  "displays": [
+   {
+    "name": "Color LCD",
+    "resolution": "1440 x 900 @ 60.00Hz",
+    "main": true
+   }
+  ],
+  "browsers": {
+   "harness_headed": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+   },
+   "harness_headless": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+   },
+   "production_default_headless": {
+    "version": "156.0.8078.4",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36"
+   },
+   "executable_path_chromium": "/Users/mikekaranja/Library/Caches/ms-playwright/chromium-1248/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+  },
+  "network": "loopback fixture only; all other browser origins aborted"
+ },
+ "configuration": {
+  "suite": "local",
+  "modes": [
+   "headed",
+   "headless"
+  ],
+  "transport": "oracle",
+  "jev_model_requested": "jev-1.13.0",
+  "typing": null,
+  "browser_launch": {
+   "channel": "chromium",
+   "headless_by_mode": {
+    "headed": false,
+    "headless": true
+   }
+  },
+  "context": {
+   "viewport": {
+    "width": 1024,
+    "height": 640
+   },
+   "locale": "en-US",
+   "timezoneId": "UTC",
+   "deviceScaleFactor": 1,
+   "default_timeout_ms": 8000
+  },
+  "format": "text",
+  "reps": 1,
+  "warmup_per_mode": 0,
+  "seed": 20261018,
+  "concurrency": 1,
+  "jev_price_per_mtok_in": 0.042,
+  "jev_worst_case_reservation_tokens": 65536,
+  "budget_usd": 0,
+  "max_minutes": 180,
+  "infra_stop_after_consecutive": 3
+ },
+ "cases": [
+  {
+   "id": "nav-new-tab",
+   "category": "navigation",
+   "difficulty": "easy",
+   "mode_sensitive": "popup/new-tab navigation",
+   "start": "/",
+   "task": "Open the store's shipping policy.",
+   "initial_state": "Home page. The shipping policy is linked only from the Help center and opens in a new tab.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "search-keyboard",
+   "category": "search",
+   "difficulty": "medium",
+   "mode_sensitive": "focus/keyboard input (results render only on an Enter keydown)",
+   "start": "/help",
+   "task": "Use the help center search to find the article about getting your money back for a return, and open it.",
+   "initial_state": "Help center with a search field. The refund article is reachable only through search results.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "extract-annual-price",
+   "category": "extraction",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/pricing",
+   "task": "Find the price of the Team subscription when it is billed annually, and stop on the page that shows it.",
+   "initial_state": "Pricing page showing monthly prices; annual prices appear only after selecting the Annual billing tab.",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "form-no-submit",
+   "category": "multi-field form without submission",
+   "difficulty": "hard",
+   "mode_sensitive": "focus/keyboard input",
+   "start": "/contact",
+   "task": "Fill in the contact form with the name Ada Lovelace, the email ada@example.com, and the message: Please call me back on Tuesday. Leave the order number empty and do not send the form.",
+   "initial_state": "Empty contact form with name, email, optional order number, message, and a Send button.",
+   "limits": {
+    "maxSteps": 12,
+    "maxSeconds": 120
+   },
+   "needs_typing": true
+  },
+  {
+   "id": "dropdowns",
+   "category": "dropdowns",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/shipping-estimator",
+   "task": "In the shipping estimator, get the estimate for Express delivery to Kenya. Do not save it as a default.",
+   "initial_state": "Two native selects: country (24 options plus a placeholder) and delivery speed (Standard selected).",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "filter-sort",
+   "category": "filtering/sorting",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/shop",
+   "task": "Show only grinders, sorted by price from lowest to highest.",
+   "initial_state": "Product table with all 11 products, no category filter, unsorted.",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "pagination",
+   "category": "pagination",
+   "difficulty": "medium",
+   "mode_sensitive": null,
+   "start": "/orders",
+   "task": "Open the details of order A-1022.",
+   "initial_state": "Orders list page 1 of 5 (newest first, 10 per page); A-1022 is on page 3.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "delayed-content",
+   "category": "delayed content",
+   "difficulty": "medium",
+   "mode_sensitive": "delayed rendering (list appears 3 s after load)",
+   "start": "/reports",
+   "task": "Open the Q3 2026 sales summary report.",
+   "initial_state": "Reports page shows 'Loading reports…' for 3 seconds before the report links render.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "ambiguous-save",
+   "category": "ambiguous controls",
+   "difficulty": "hard",
+   "mode_sensitive": null,
+   "start": "/settings",
+   "task": "Turn on email alerts for new invoices and save the notification preferences. Leave everything else as it is.",
+   "initial_state": "Settings with a Billing form and a Notifications form; both have a button labelled exactly 'Save'. invoice=off, shipped=on, news=off.",
+   "limits": {
+    "maxSteps": 8,
+    "maxSeconds": 75
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "unavailable-target",
+   "category": "unavailable target",
+   "difficulty": "hard",
+   "mode_sensitive": null,
+   "start": "/shop",
+   "task": "Add the Moka Express in Midnight Blue to the cart.",
+   "initial_state": "Shop list. The Moka Express exists but only in Silver and Red; Midnight Blue does not exist.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "stop-before-submit",
+   "category": "stop-before-submit",
+   "difficulty": "hard",
+   "mode_sensitive": null,
+   "start": "/cart",
+   "task": "Go through checkout up to the final order review step, then stop. Do not place the order.",
+   "initial_state": "Cart with one kettle. Checkout: cart → shipping form (GET submit) → review page with a 'Place order' button.",
+   "limits": {
+    "maxSteps": 10,
+    "maxSeconds": 90
+   },
+   "needs_typing": false
+  },
+  {
+   "id": "offscreen-lazy",
+   "category": "scrolling to offscreen controls",
+   "difficulty": "medium",
+   "mode_sensitive": "scrolling (the target link renders only when the page bottom enters the viewport)",
+   "start": "/product/stagg-kettle",
+   "task": "From this product page, open the page for registering the product's warranty.",
+   "initial_state": "Long product page; the warranty registration link is added by an IntersectionObserver at the bottom.",
+   "limits": {
+    "maxSteps": 12,
+    "maxSeconds": 100
+   },
+   "needs_typing": false
+  }
+ ],
+ "schedule": [
+  {
+   "index": 0,
+   "case": "unavailable-target",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p1",
+   "seed": 20261018
+  },
+  {
+   "index": 1,
+   "case": "unavailable-target",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p1",
+   "seed": 20261019
+  },
+  {
+   "index": 2,
+   "case": "pagination",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p2",
+   "seed": 20261020
+  },
+  {
+   "index": 3,
+   "case": "pagination",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p2",
+   "seed": 20261021
+  },
+  {
+   "index": 4,
+   "case": "form-no-submit",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p3",
+   "seed": 20261022
+  },
+  {
+   "index": 5,
+   "case": "form-no-submit",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p3",
+   "seed": 20261023
+  },
+  {
+   "index": 6,
+   "case": "search-keyboard",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p4",
+   "seed": 20261024
+  },
+  {
+   "index": 7,
+   "case": "search-keyboard",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p4",
+   "seed": 20261025
+  },
+  {
+   "index": 8,
+   "case": "nav-new-tab",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p5",
+   "seed": 20261026
+  },
+  {
+   "index": 9,
+   "case": "nav-new-tab",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p5",
+   "seed": 20261027
+  },
+  {
+   "index": 10,
+   "case": "offscreen-lazy",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p6",
+   "seed": 20261028
+  },
+  {
+   "index": 11,
+   "case": "offscreen-lazy",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p6",
+   "seed": 20261029
+  },
+  {
+   "index": 12,
+   "case": "filter-sort",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p7",
+   "seed": 20261030
+  },
+  {
+   "index": 13,
+   "case": "filter-sort",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p7",
+   "seed": 20261031
+  },
+  {
+   "index": 14,
+   "case": "stop-before-submit",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p8",
+   "seed": 20261032
+  },
+  {
+   "index": 15,
+   "case": "stop-before-submit",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p8",
+   "seed": 20261033
+  },
+  {
+   "index": 16,
+   "case": "extract-annual-price",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p9",
+   "seed": 20261034
+  },
+  {
+   "index": 17,
+   "case": "extract-annual-price",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p9",
+   "seed": 20261035
+  },
+  {
+   "index": 18,
+   "case": "dropdowns",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p10",
+   "seed": 20261036
+  },
+  {
+   "index": 19,
+   "case": "dropdowns",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p10",
+   "seed": 20261037
+  },
+  {
+   "index": 20,
+   "case": "ambiguous-save",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p11",
+   "seed": 20261038
+  },
+  {
+   "index": 21,
+   "case": "ambiguous-save",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p11",
+   "seed": 20261039
+  },
+  {
+   "index": 22,
+   "case": "delayed-content",
+   "mode": "headed",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p12",
+   "seed": 20261040
+  },
+  {
+   "index": 23,
+   "case": "delayed-content",
+   "mode": "headless",
+   "rep": 1,
+   "warmup": false,
+   "pair": "p12",
+   "seed": 20261041
+  }
+ ]
+}
