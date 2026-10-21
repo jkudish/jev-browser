@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.9
+
+- Updated the repository's locked Hono dependency to 4.13.13. No browser behavior changes; this does not enforce a Hono minimum in consumers' existing lockfiles.
+
 ## 0.8.8
 
 - Updated typing-provider dependencies and Playwright, including its cross-origin redirect fix.
