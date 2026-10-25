@@ -190,7 +190,13 @@ const STOP_WORDS = new Set([
 
 /** Deterministic typing fallback when no small-LLM key is available. */
 export function heuristicQuery(task: string): string {
-  const words = task
+  // Explicit targets keep meaningful words ("The Who"), spelling and punctuation.
+  const quoted = task.match(/"([^"]+)"|“([^”]+)”/);
+  if (quoted) return (quoted[1] ?? quoted[2]!).trim();
+  const goal = task.split(/\s+(?:and|then)\s+stop\b/i, 1)[0]!;
+  const named = goal.match(/\bcalled\s+(.+)/i);
+  if (named) return named[1]!.trim();
+  const words = goal
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)

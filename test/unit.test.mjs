@@ -176,6 +176,12 @@ test("pickAlternate returns next-best non-excluded option", () => {
 
 test("heuristicQuery strips task boilerplate", () => {
   assert.equal(heuristicQuery("Search Wikipedia for the article about Ristretto and stop on it"), "ristretto");
+  assert.equal(heuristicQuery("Search Wikipedia for the espresso-based drink called Ristretto and stop when you are on that article"), "Ristretto");
+  assert.equal(heuristicQuery('Search this site for "The Who" and stop on the results page'), "The Who");
+  assert.equal(heuristicQuery('Search for “café au lait” then stop when results appear'), "café au lait");
+  assert.equal(heuristicQuery("Find the book called The Left Hand of Darkness and stop on its page"), "The Left Hand of Darkness");
+  assert.equal(heuristicQuery("Search for blue ceramic mugs and stop when results appear"), "blue ceramic mugs");
+  assert.equal(heuristicQuery("Search for children's books"), "children s books");
 });
 
 // ── Password delivery (src/password.ts) ──────────────────────────────────────

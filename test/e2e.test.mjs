@@ -1017,7 +1017,7 @@ test("degraded search_eN: a dead typing provider still searches via the keyword 
         // step detail says so explicitly.
         const searched = body.steps.find((s) => /^search_/.test(s.executed_action ?? "") && !s.action_error);
         assert.ok(searched, `expected a search step: ${JSON.stringify(body.steps)}`);
-        assert.equal(searched.detail, 'searched "ristretto results" via keyword-heuristic-after-generator-error');
+        assert.equal(searched.detail, 'searched "ristretto" via keyword-heuristic-after-generator-error');
         assert.equal(body.degraded, true);
         const warning = body.warnings.find((w) => w.code === "typing_generator_error");
         assert.ok(warning, `expected a typing_generator_error warning: ${JSON.stringify(body.warnings)}`);
