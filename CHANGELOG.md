@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.10
+
+- Updated MCP SDK to 2.4.0 and Node adapter to 2.1.2. Updated the repository's locked undici dependency to 7.30.1; this does not enforce a minimum in consumers' existing lockfiles or update Node's bundled fetch implementation.
+
 ## 0.8.9
 
 - Updated the repository's locked Hono dependency to 4.13.13. No browser behavior changes; this does not enforce a Hono minimum in consumers' existing lockfiles.
