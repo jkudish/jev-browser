@@ -1,4 +1,4 @@
-// Opt-in stateless Streamable HTTP transport (`jev-browser --http`).
+// Opt-in stateless Streamable HTTP transport (`discern-browser --http`).
 //
 // Serves MCP 2026-07-28 per request and 2025-era clients through the SDK's
 // stateless fallback: no sessions, no Mcp-Session-Id, nothing held between
@@ -40,18 +40,18 @@ export async function serveHttp(factory: () => McpServer, env: NodeJS.ProcessEnv
   // Loopback by default: binding a public interface is an explicit act.
   const host = env.HOST || "127.0.0.1";
   const port = Number(env.PORT || 8080);
-  const token = Buffer.from(env.JEV_BROWSER_AUTH_TOKEN ?? "");
+  const token = Buffer.from(env.DISCERN_BROWSER_AUTH_TOKEN ?? "");
   // Each admitted request drives a full headless-browser run (its own Chromium
   // for up to the caller's time budget), so the default cap is far below the
-  // API-only jev-mcp: shedding load beats OOM-ing the host on browser memory.
-  const maxInFlight = Number(env.JEV_BROWSER_MAX_CONCURRENCY ?? 4);
-  // The server spends the operator's Jev key and drives credential-guarded
+  // API-only discern-mcp: shedding load beats OOM-ing the host on browser memory.
+  const maxInFlight = Number(env.DISCERN_BROWSER_MAX_CONCURRENCY ?? 4);
+  // The server spends the operator's judgment-provider key and drives credential-guarded
   // browser sessions; never expose it unauthenticated.
   if (token.length === 0 && !LOOPBACK.has(host)) {
-    throw new Error("JEV_BROWSER_AUTH_TOKEN is required when HTTP mode binds a non-loopback HOST");
+    throw new Error("DISCERN_BROWSER_AUTH_TOKEN is required when HTTP mode binds a non-loopback HOST");
   }
   if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
-    throw new Error("JEV_BROWSER_MAX_CONCURRENCY must be a positive integer");
+    throw new Error("DISCERN_BROWSER_MAX_CONCURRENCY must be a positive integer");
   }
 
   const authorized = (header: string | undefined) => {
@@ -69,10 +69,10 @@ export async function serveHttp(factory: () => McpServer, env: NodeJS.ProcessEnv
       // The tool list never changes: refuse subscriptions/listen in-band
       // instead of letting a client park an idle SSE stream on a slot.
       maxSubscriptions: 0,
-      onerror: (error) => console.error(`[jev-browser] http: ${error.message}`),
+      onerror: (error) => console.error(`[discern-browser] http: ${error.message}`),
     }),
     {
-      onerror: (error) => console.error(`[jev-browser] http: ${error.message}`),
+      onerror: (error) => console.error(`[discern-browser] http: ${error.message}`),
     },
   );
 
@@ -89,7 +89,7 @@ export async function serveHttp(factory: () => McpServer, env: NodeJS.ProcessEnv
       res.writeHead(401, { "www-authenticate": "Bearer" }).end();
     } else if (inFlight >= maxInFlight) {
       // Backpressure: each in-flight request runs a browser and may spend the
-      // operator's Jev key; shed load instead of queueing it.
+      // operator's judgment-provider key; shed load instead of queueing it.
       res.writeHead(429, { "retry-after": "1" }).end();
     } else {
       inFlight++;
@@ -97,7 +97,7 @@ export async function serveHttp(factory: () => McpServer, env: NodeJS.ProcessEnv
         .catch((error) => {
           // toNodeHandler reports its own failures through onerror; a promise
           // rejection here must not become an unhandled one that kills Node.
-          console.error(`[jev-browser] http: ${(error as Error)?.message ?? error}`);
+          console.error(`[discern-browser] http: ${(error as Error)?.message ?? error}`);
           res.destroy();
         })
         .finally(() => inFlight--);

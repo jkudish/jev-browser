@@ -1,8 +1,9 @@
-// CLI: `jev-browser run "<task>" <start-url> [options]`
+// CLI: `discern-browser run "<task>" <start-url> [options]`
 // Everything else (no args) starts the MCP stdio server (src/index.ts).
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseCookieSpec } from "./lib.js";
+import { applyDiscernEnv } from "./env.js";
 import { navigate, type NavigateOptions } from "./navigate.js";
 import { assertNoPlaywrightDebug, parseTrustedOrigin, readSecretFromPath, readSecretFromStdin, validateSecretBuffer } from "./password.js";
 
@@ -74,7 +75,7 @@ function parseArgs(argv: string[]): CliArgs {
   return { ...args, task, startUrl };
 }
 
-const HELP = `jev-browser run "<task>" <start-url> [options]
+const HELP = `discern-browser run "<task>" <start-url> [options]
 
 Options:
   --format <text|markdown|html|aria>   Final page payload (default text)
@@ -96,15 +97,17 @@ Options:
   --password-file <path|->            Fill native password fields with a secret
                                        read from <path> or piped on stdin ('-');
                                        e.g. op read --no-newline 'op://...' |
-                                       jev-browser run ... --password-file -
+                                       discern-browser run ... --password-file -
   --password-origin <origin>          Required with --password-file: the exact
                                        origin (e.g. https://acme.com) the
                                        password may be filled on; http only on
                                        localhost
   -h, --help                           Show this help
 
-Result JSON is printed to stdout. Environment: TYPESAFE_API_KEY required;
-JEV_BROWSER_* vars configure models and the typing provider.
+Result JSON is printed to stdout. Environment: a judgment provider key
+(TYPESAFE_API_KEY by default; DISCERN_PROVIDER selects another);
+DISCERN_BROWSER_* vars configure models and the typing provider. Legacy
+JEV_* names still work through 1.x with a deprecation line on stderr.
 
 Without "run", this binary starts the MCP stdio server.`;
 
@@ -119,6 +122,17 @@ export async function runCli(argv: string[]): Promise<number> {
   if (args.help || !args.task || !args.startUrl) {
     console.log(HELP);
     return args.help ? 0 : 1;
+  }
+
+  // Legacy JEV_ variables are normalized into their DISCERN_ names once,
+  // before anything reads the environment. Deprecation lines go to stderr;
+  // stdout carries only the result JSON. A conflict names both variables and
+  // never their values.
+  try {
+    applyDiscernEnv();
+  } catch (error) {
+    console.error(`error: ${(error as Error).message}`);
+    return 2;
   }
 
   // Credential delivery: the secret arrives through stdin or a local file the
@@ -173,7 +187,7 @@ export async function runCli(argv: string[]): Promise<number> {
       // working directory, and is removed after the video is copied out.
       const os = await import("node:os");
       const fs = await import("node:fs/promises");
-      tempRecordDir = await fs.mkdtemp(join(os.tmpdir(), "jev-browser-record-"));
+      tempRecordDir = await fs.mkdtemp(join(os.tmpdir(), "discern-browser-record-"));
       recordDir = tempRecordDir;
     } else {
       recordDir = recordPath;
@@ -224,7 +238,7 @@ export async function runCli(argv: string[]): Promise<number> {
     // gets exactly one concise stderr line, everything else lives in the JSON.
     if (result.degraded && Array.isArray(result.warnings) && result.warnings.length > 0) {
       const first = result.warnings[0];
-      console.error(`jev-browser: degraded typing, ${result.warnings.length} warning(s), first ${first.code} at step ${first.step}; see "warnings" in the result JSON`);
+      console.error(`discern-browser: degraded typing, ${result.warnings.length} warning(s), first ${first.code} at step ${first.step}; see "warnings" in the result JSON`);
     }
 
     console.log(JSON.stringify(result, null, 2));
