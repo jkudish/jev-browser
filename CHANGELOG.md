@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- OpenAI Decisions judgments (spike) with `JEV_PROVIDER=openai`, via the unreleased `@jkudish/jev-agent-tools` OpenAI transport. Never auto-detected. Cost estimates use the answering carrier's input price.
+
 ## 0.8.10
 
 - Updated MCP SDK to 2.4.0 and Node adapter to 2.1.2. Updated the repository's locked undici dependency to 7.30.1; this does not enforce a minimum in consumers' existing lockfiles or update Node's bundled fetch implementation.

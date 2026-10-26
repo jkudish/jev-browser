@@ -346,3 +346,30 @@ test("control observations use bounded state tokens, never field values or arbit
     assert.equal(JSON.stringify(observed).includes('private-'), false);
   } finally { await browser.close(); }
 });
+
+test("cost estimate uses the answering carrier's input price", async (t) => {
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    if (String(error).includes("Executable doesn't exist")) {
+      t.skip("Playwright browser binary is not installed");
+      return;
+    }
+    throw error;
+  }
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<p>Nothing to do here</p>");
+    const cost = async (name) => {
+      const result = await navigate({
+        task: "Read the page", page, allowTyping: false, maxSteps: 1, screenshot: "none",
+        transport: { name, ask: async (request) => ({ answers: { action: { type: "choice", choice: "scroll_down", probabilities: Object.fromEntries(Object.keys(request.questions.action.criteria).map((key) => [key, key === "scroll_down" ? 1 : 0])) }, goal_done: { type: "noul", noul: 0 }, stuck: { type: "noul", noul: 0 } }, usage: { input_tokens: 1_000_000, output_tokens: 0 }, model: "m" }) },
+      });
+      assert.equal(result.usage.jev_calls, 1);
+      return result.usage.est_cost_usd;
+    };
+    assert.equal(await cost("openai"), 0.1);
+    assert.equal(await cost("typesafe"), 0.042);
+  } finally { await browser.close(); }
+});
