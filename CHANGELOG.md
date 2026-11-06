@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.12
+
+- Updated Playwright to 1.65.0 (Chromium 158) and Turndown to 7.2.5.
+
 ## 0.8.11
 
 - Updated the repository's locked Hono dependency to 4.13.14 and `@hono/node-server` to 2.1.5, including its static-file middleware fix. This package does not use that middleware; these lockfile updates do not enforce a minimum in consumers' existing lockfiles.
