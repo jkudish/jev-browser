@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.13
+
+- Updated locked Hono and Node HTTP adapter dependencies to address upstream security advisories. These lockfile updates do not enforce a minimum in consumers’ existing lockfiles.
+
 ## 0.8.12
 
 - Updated Playwright to 1.65.0 (Chromium 158) and Turndown to 7.2.5.
