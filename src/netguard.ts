@@ -264,6 +264,8 @@ export async function startGuardProxy(opts: {
   allow?: AllowList;
   resolver?: Resolver;
   onBlocked?: (message: string) => void;
+  /** Per-address CONNECT dial timeout (default 5000ms). */
+  connectTimeoutMs?: number;
 }): Promise<GuardProxy> {
   const allow = opts.allow ?? parseAllowList();
   const resolver = opts.resolver ?? defaultResolver;
@@ -309,6 +311,7 @@ export async function startGuardProxy(opts: {
   });
   server.on("connect", async (req, client, head) => {
     // Attach before awaiting DNS: a client reset during resolution must not surface as an unhandled 'error'.
+    const connectTimeoutMs = opts.connectTimeoutMs ?? 5_000;
     let clientGone = false;
     let up: net.Socket | null = null;
     client.on("error", () => {
@@ -330,13 +333,29 @@ export async function startGuardProxy(opts: {
         const sock = await new Promise<net.Socket | null>((resolve) => {
           const c = net.connect(Number(port), ips[n]);
           sockets.add(c);
-          c.on("close", () => sockets.delete(c));
           up = c;
-          c.once("connect", () => resolve(c));
-          c.once("error", () => {
-            c.destroy();
-            resolve(null);
+          let settled = false;
+          const finish = (ok: boolean) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            client.off("close", onClientGone);
+            client.off("error", onClientGone);
+            if (!ok) c.destroy();
+            resolve(ok ? c : null);
+          };
+          // Per-address timeout: a blackholed address must not stall the remaining validated ones.
+          const timer = setTimeout(() => finish(false), connectTimeoutMs);
+          // Settle if the client goes away mid-attempt so the handler never stays suspended.
+          const onClientGone = () => finish(false);
+          client.once("close", onClientGone);
+          client.once("error", onClientGone);
+          c.on("close", () => {
+            sockets.delete(c);
+            finish(false);
           });
+          c.once("connect", () => finish(true));
+          c.once("error", () => finish(false));
         });
         if (clientGone) {
           sock?.destroy();

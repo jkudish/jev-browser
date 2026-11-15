@@ -771,6 +771,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       void context.unroute("**/*", routeHandler).catch(() => {});
     };
     // Playwright has no unrouteWebSocket: deactivate by flag so a borrowed context is not left guarded.
+    // Known limit: Playwright exposes no way to detect or chain to a caller's previously registered
+    // routeWebSocket handlers (there is no WebSocketRoute.fallback). Handlers registered later win, so on a
+    // borrowed context our pass-through (connectToServer) shadows any earlier caller handler for the rest of
+    // the context's life; traffic still flows, but caller mocks for WebSockets will not run.
     let wsGuardActive = true;
     const prevUnroute = unrouteGuards;
     unrouteGuards = () => {

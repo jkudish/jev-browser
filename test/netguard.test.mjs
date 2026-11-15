@@ -281,6 +281,56 @@ test("proxy CONNECT: falls back across validated addresses without re-resolving"
   }
 });
 
+test("proxy CONNECT: a stalled address times out and falls through to the next validated address", async () => {
+  const target = createNetServer((s) => s.end("hello"));
+  await new Promise((r) => target.listen(0, "127.0.0.1", r));
+  const port = target.address().port;
+  // 192.0.2.1 (TEST-NET-1) is unroutable: it either hangs (timeout path) or fails fast; both must fall through.
+  const proxy = await startGuardProxy({
+    allow: parseAllowList("stall.test"),
+    connectTimeoutMs: 200,
+    resolver: async () => ["192.0.2.1", "127.0.0.1"],
+  });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    let buf = "";
+    c.on("data", (d) => (buf += d));
+    c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    const t0 = Date.now();
+    c.write(`CONNECT stall.test:${port} HTTP/1.1\r\nHost: stall.test:${port}\r\n\r\n`);
+    await new Promise((r) => c.once("close", r));
+    assert.match(buf, /^HTTP\/1\.1 200 /);
+    assert.match(buf, /hello/);
+    assert.ok(Date.now() - t0 < 3000);
+  } finally {
+    await proxy.close();
+    target.close();
+  }
+});
+
+test("proxy CONNECT: client closing mid dial attempt settles the handler and tears down the upstream socket", async () => {
+  const proxy = await startGuardProxy({
+    allow: parseAllowList("gone.test"),
+    connectTimeoutMs: 60_000,
+    resolver: async () => ["192.0.2.1"],
+  });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    c.write("CONNECT gone.test:443 HTTP/1.1\r\nHost: gone.test:443\r\n\r\n");
+    await new Promise((r) => setTimeout(r, 100));
+    c.destroy();
+    // close() destroys tracked sockets; it must resolve promptly rather than hang on the 60s dial timeout.
+    const t0 = Date.now();
+    await proxy.close();
+    assert.ok(Date.now() - t0 < 3000);
+  } finally {
+    await proxy.close().catch(() => {});
+  }
+});
+
 test("proxy CONNECT: every address stays validated (mixed public/private is refused)", async () => {
   const blockedMsgs = [];
   const proxy = await startGuardProxy({ allow: none, resolver: async () => ["93.184.216.34", "127.0.0.1"], onBlocked: (m) => blockedMsgs.push(m) });
