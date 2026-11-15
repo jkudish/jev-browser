@@ -434,3 +434,197 @@ test("navigate: borrowed page (unproxied opt-in) leaves no active WebSocket guar
     if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE; else process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = saved;
   }
 });
+
+// Raw TCP origin that answers every request with a fixed byte string, counting connections.
+const rawOrigin = async (response) => {
+  const conns = [];
+  const srv = createNetServer((s) => {
+    conns.push(s);
+    s.on("error", () => {});
+    s.once("data", () => s.end(response));
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  return { srv, conns, port: srv.address().port };
+};
+
+const gateOf = () => {
+  let open;
+  const promise = new Promise((r) => (open = r));
+  return { promise, open };
+};
+
+test("proxy HTTP: upstream head that Node cannot re-emit (Content-Length + Trailer) fails only that request", async () => {
+  const errors = [];
+  const onUncaught = (e) => errors.push(e);
+  process.on("uncaughtException", onUncaught);
+  const origin = await rawOrigin("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nTrailer: X-Foo\r\nConnection: close\r\n\r\nhello");
+  const proxy = await startGuardProxy({ allow: parseAllowList(`127.0.0.1:${origin.port}`) });
+  const get = () =>
+    new Promise((resolve) => {
+      const req = httpRequest({ host: "127.0.0.1", port: proxy.port, method: "GET", path: `http://127.0.0.1:${origin.port}/`, headers: { host: `127.0.0.1:${origin.port}` }, agent: false }, (res) => {
+        let body = "";
+        res.on("data", (d) => (body += d));
+        res.on("end", () => resolve({ status: res.statusCode, body, trailer: res.headers.trailer }));
+        res.on("error", () => resolve({ error: true }));
+      });
+      req.on("error", () => resolve({ error: true }));
+      req.end();
+      setTimeout(() => resolve({ hung: true }), 3000);
+    });
+  try {
+    const out = await get();
+    assert.notEqual(out.hung, true);
+    // The incompatible header is stripped and the response is forwarded intact.
+    assert.equal(out.status, 200);
+    assert.equal(out.body, "hello");
+    assert.equal(out.trailer, undefined);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(errors.map(String), [], "process must not see an uncaught exception");
+    assert.equal((await get()).status, 200, "the proxy keeps serving afterwards");
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    await proxy.close();
+    origin.srv.close();
+  }
+});
+
+test("proxy HTTP: client closing during DNS never creates an upstream connection", async () => {
+  const origin = await rawOrigin("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+  const gate = gateOf();
+  const asked = gateOf();
+  const proxy = await startGuardProxy({
+    allow: parseAllowList(`slow.test:${origin.port}`),
+    resolver: async () => { asked.open(); await gate.promise; return ["127.0.0.1"]; },
+  });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    c.write(`GET http://slow.test:${origin.port}/ HTTP/1.1\r\nHost: slow.test:${origin.port}\r\n\r\n`);
+    await asked.promise; // the handler is now suspended inside DNS
+    const closed = new Promise((r) => c.once("close", r));
+    c.destroy();
+    await closed;
+    await new Promise((r) => setTimeout(r, 50)); // let the proxy observe the close
+    gate.open();
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(origin.conns.length, 0, "no upstream connection after the client left");
+  } finally {
+    gate.open();
+    await proxy.close();
+    origin.srv.close();
+  }
+});
+
+test("proxy HTTP: proxy.close() during DNS never creates an upstream connection", async () => {
+  const origin = await rawOrigin("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+  const gate = gateOf();
+  const asked = gateOf();
+  const proxy = await startGuardProxy({
+    allow: parseAllowList(`slow.test:${origin.port}`),
+    resolver: async () => { asked.open(); await gate.promise; return ["127.0.0.1"]; },
+  });
+  const c = netConnect(proxy.port, "127.0.0.1");
+  c.on("error", () => {});
+  try {
+    await new Promise((r) => c.once("connect", r));
+    c.write(`GET http://slow.test:${origin.port}/ HTTP/1.1\r\nHost: slow.test:${origin.port}\r\n\r\n`);
+    await asked.promise;
+    await proxy.close();
+    gate.open();
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(origin.conns.length, 0, "no upstream connection after proxy close");
+  } finally {
+    gate.open();
+    c.destroy();
+    origin.srv.close();
+  }
+});
+
+test("proxy HTTP: proxy.close() destroys an in-flight upstream HTTP socket", async () => {
+  const upClosed = gateOf();
+  const gotRequest = gateOf();
+  const srv = createNetServer((s) => {
+    s.on("error", () => {});
+    s.on("close", upClosed.open);
+    s.once("data", gotRequest.open); // request received, never answered
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const port = srv.address().port;
+  const proxy = await startGuardProxy({ allow: parseAllowList(`127.0.0.1:${port}`) });
+  const c = netConnect(proxy.port, "127.0.0.1");
+  c.on("error", () => {});
+  try {
+    await new Promise((r) => c.once("connect", r));
+    c.write(`GET http://127.0.0.1:${port}/ HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`);
+    await gotRequest.promise;
+    await proxy.close();
+    await Promise.race([upClosed.promise, new Promise((_, rej) => setTimeout(() => rej(new Error("upstream socket still open after close()")), 3000))]);
+  } finally {
+    c.destroy();
+    srv.close();
+  }
+});
+
+test("assertUrlAllowed: an abort during DNS rejects with the abort reason without waiting for the resolver", async () => {
+  const ctl = new AbortController();
+  const gate = gateOf();
+  const p = assertUrlAllowed("http://slow.test/", { allow: none, resolver: async () => { await gate.promise; return ["93.184.216.34"]; }, signal: ctl.signal });
+  const reason = new Error("cancelled-by-caller");
+  ctl.abort(reason);
+  await assert.rejects(() => p, (e) => e === reason);
+  gate.open();
+  // Already-aborted signal: refused without consulting the resolver result.
+  await assert.rejects(() => assertUrlAllowed("http://slow.test/", { allow: none, resolver: async () => ["93.184.216.34"], signal: ctl.signal }), (e) => e === reason);
+  // A blocked verdict still wins over a live signal (blocking is never weakened).
+  await assert.rejects(() => assertUrlAllowed("http://rebind.test/", { allow: none, resolver: async () => ["127.0.0.1"], signal: new AbortController().signal }), /resolves to/);
+});
+
+test("navigate: caller cancel during the start-URL DNS preflight returns promptly and never waits on the resolver", async () => {
+  const gate = gateOf();
+  const asked = gateOf();
+  const ctl = new AbortController();
+  const run = navigate({
+    task: "x", startUrl: "http://slow.test/", maxSeconds: 60, screenshot: "none", transport: judge,
+    resolver: async () => { asked.open(); await gate.promise; return ["93.184.216.34"]; },
+  }, ctl.signal);
+  try {
+    await asked.promise;
+    const t0 = Date.now();
+    ctl.abort();
+    const r = await Promise.race([run, new Promise((res) => setTimeout(() => res("hung"), 3000))]);
+    assert.notEqual(r, "hung", "navigate must not wait for DNS after cancel");
+    assert.equal(r.status, "error");
+    assert.match(r.error ?? "", /cancelled-by-caller/);
+    assert.ok(Date.now() - t0 < 2000);
+  } finally {
+    gate.open();
+  }
+});
+
+test("navigate: maxSeconds deadline during the start-URL DNS preflight ends the run as a timeout", async () => {
+  const gate = gateOf();
+  try {
+    const t0 = Date.now();
+    const r = await Promise.race([
+      navigate({ task: "x", startUrl: "http://slow.test/", maxSeconds: 0.3, screenshot: "none", transport: judge, resolver: async () => { await gate.promise; return ["93.184.216.34"]; } }),
+      new Promise((res) => setTimeout(() => res("hung"), 3000)),
+    ]);
+    assert.notEqual(r, "hung");
+    assert.equal(r.status, "timeout");
+    assert.ok(Date.now() - t0 < 2000);
+  } finally {
+    gate.open();
+  }
+});
+
+test("navigate: cancellation that lands as DNS resolves stops the run before any proxy or browser start", async () => {
+  const ctl = new AbortController();
+  const r = await navigate({
+    task: "x", startUrl: "http://slow.test/", maxSeconds: 60, screenshot: "none", transport: judge,
+    resolver: async () => { ctl.abort(); return ["93.184.216.34"]; },
+  }, ctl.signal);
+  assert.equal(r.status, "error");
+  assert.match(r.error ?? "", /cancelled-by-caller/);
+  assert.ok(r.elapsed_ms < 2000, "no browser launch time spent");
+});

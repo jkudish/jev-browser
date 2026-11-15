@@ -3,7 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
-import { assertUrlAllowed, BlockedAddressError, startGuardProxy, type GuardProxy } from "./netguard.js";
+import { assertUrlAllowed, BlockedAddressError, startGuardProxy, type GuardProxy, type Resolver } from "./netguard.js";
 import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request, type Response, type Route } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -71,6 +71,8 @@ export interface NavigateOptions {
    * MCP adapters take file or environment references, never values).
    */
   cookies?: SeedCookie[];
+  /** Test seam: DNS resolver for the start-URL preflight (default: system DNS). */
+  resolver?: Resolver;
 }
 
 export interface StepRecord {
@@ -730,8 +732,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
   try {
     ownsBrowser = !options.page;
-    if (startUrl) await assertUrlAllowed(startUrl); // refuse before any browser launches
+    // Refuse before any browser launches. The DNS step races the run signal (deadline / caller
+    // cancel), and cancellation is rechecked before the proxy or Chromium start.
+    if (startUrl) await assertUrlAllowed(startUrl, { signal: controller.signal, resolver: options.resolver });
+    controller.signal.throwIfAborted();
     if (!options.page) guardProxy = await startGuardProxy({ onBlocked: (m) => blockedRequests.push(m) });
+    controller.signal.throwIfAborted();
     browser = options.page
       ? null
       : await chromium.launch({

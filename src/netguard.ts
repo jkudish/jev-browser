@@ -190,10 +190,33 @@ export class BlockedAddressError extends Error {
   }
 }
 
-/** Throws BlockedAddressError unless the URL is public (or allow-listed). */
+/** Settle with `p`, or reject with the signal's reason as soon as it aborts (p keeps running, result ignored). */
+function abortable<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) {
+    p.catch(() => {});
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+/** Throws BlockedAddressError unless the URL is public (or allow-listed). Pass `signal` to make the DNS step abortable. */
 export async function assertUrlAllowed(
   rawUrl: string,
-  opts: { resolver?: Resolver; allow?: AllowList } = {},
+  opts: { resolver?: Resolver; allow?: AllowList; signal?: AbortSignal } = {},
 ): Promise<void> {
   const allow = opts.allow ?? parseAllowList();
   let u: URL;
@@ -210,8 +233,10 @@ export async function assertUrlAllowed(
   if (verdict.literal) return; // public IP literal
   let addrs: string[];
   try {
-    addrs = await (opts.resolver ?? defaultResolver)(verdict.host);
-  } catch {
+    addrs = await abortable((opts.resolver ?? defaultResolver)(verdict.host), opts.signal);
+  } catch (e) {
+    // A caller cancel / deadline is not a DNS verdict: surface it as the abort it is.
+    if (opts.signal?.aborted) throw opts.signal.reason ?? e;
     // Fail closed: with a proxy-less (injected) page the browser resolves DNS itself and could
     // get a different answer than we could, so an unresolvable name is never waved through.
     throw new BlockedAddressError(rawUrl, `DNS resolution failed for ${verdict.host}`);
@@ -278,18 +303,59 @@ export async function startGuardProxy(opts: {
     void res;
     sock?.destroy();
   };
+  // Hop-by-hop headers (RFC 9110 7.6.1) plus Trailer: they describe the upstream hop and can
+  // make res.writeHead throw (e.g. Content-Length + Trailer -> ERR_HTTP_TRAILER_INVALID).
+  const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"]);
+  const forwardableHeaders = (h: http.IncomingHttpHeaders): http.OutgoingHttpHeaders => {
+    const named = new Set(
+      String(h.connection ?? "")
+        .split(",")
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    const out: http.OutgoingHttpHeaders = {};
+    for (const [k, v] of Object.entries(h)) {
+      if (v === undefined || HOP_BY_HOP.has(k) || named.has(k)) continue;
+      out[k] = v;
+    }
+    return out;
+  };
+  const upstreams = new Set<http.ClientRequest>();
+  let closing = false;
   const server = http.createServer(async (req, res) => {
+    // Attach teardown before awaiting DNS: a client that goes away (or a proxy close) during
+    // resolution must never result in an upstream connection being created.
+    let gone = false;
+    let up: http.ClientRequest | null = null;
+    const teardown = () => {
+      gone = true;
+      up?.destroy();
+    };
+    res.on("close", teardown);
+    req.socket.once("close", teardown);
     try {
       const u = new URL(req.url ?? "");
       if (u.protocol !== "http:") throw new BlockedAddressError(req.url ?? "", "unsupported proxy scheme");
       const port = u.port || "80";
       const ip = (await resolveValidated(u.hostname, port, allow, resolver))[0];
+      if (gone || closing || req.socket.destroyed) {
+        res.destroy();
+        return;
+      }
       const headers = { ...req.headers };
       delete headers["proxy-connection"];
-      const up = http.request(
-        { host: ip, port: Number(port), method: req.method, path: u.pathname + u.search, headers: { ...headers, host: u.host } },
+      const request = http.request(
+        // agent:false: no connection pooling, so every upstream socket belongs to exactly one tracked request.
+        { host: ip, port: Number(port), method: req.method, path: u.pathname + u.search, headers: { ...headers, host: u.host }, agent: false },
         (r) => {
-          res.writeHead(r.statusCode ?? 502, r.headers);
+          try {
+            res.writeHead(r.statusCode ?? 502, r.statusMessage, forwardableHeaders(r.headers));
+          } catch {
+            // Unforwardable upstream head: fail only this request, never the process.
+            r.destroy();
+            res.destroy();
+            return;
+          }
           // A truncated upstream body must not look like a complete response to the browser.
           r.on("aborted", () => res.destroy());
           r.on("error", () => res.destroy());
@@ -299,10 +365,20 @@ export async function startGuardProxy(opts: {
           r.pipe(res);
         },
       );
-      up.on("error", () => res.headersSent || res.writeHead(502).end());
-      res.on("close", () => up.destroy());
-      req.socket.on("close", () => up.destroy());
-      req.pipe(up);
+      up = request;
+      upstreams.add(request);
+      request.on("close", () => upstreams.delete(request));
+      request.on("error", () => {
+        if (res.headersSent) res.destroy();
+        else if (!res.destroyed) {
+          try {
+            res.writeHead(502).end();
+          } catch {
+            res.destroy();
+          }
+        }
+      });
+      req.pipe(request);
     } catch (e) {
       blockedOut(e, req.socket, res);
     }
@@ -382,6 +458,8 @@ export async function startGuardProxy(opts: {
     port: (server.address() as net.AddressInfo).port,
     close: () =>
       new Promise<void>((r) => {
+        closing = true;
+        for (const u of upstreams) u.destroy();
         for (const s of sockets) s.destroy();
         server.close(() => r());
       }),
