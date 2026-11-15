@@ -2,6 +2,9 @@
 // Skipped unless TYPESAFE_API_KEY is set. Requires Playwright Chromium.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+
+// Fixtures serve from loopback; the SSRF guard blocks that by default.
+process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = "127.0.0.1";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -172,6 +175,7 @@ async function withClient(fn, extraEnv = {}) {
     args: [serverPath],
     env: {
       TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY ?? "",
+      JEV_BROWSER_ALLOW_PRIVATE_HOSTS: "127.0.0.1",
       ...(process.env.OPENROUTER_API_KEY ? { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY } : {}),
       ...(process.env.JEV_BROWSER_TYPE_MODEL ? { JEV_BROWSER_TYPE_MODEL: process.env.JEV_BROWSER_TYPE_MODEL } : {}),
       ...extraEnv,

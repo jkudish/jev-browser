@@ -12,7 +12,7 @@ const TOKEN = "test-token-0123456789abcdef";
 
 async function startHttp(env) {
   const child = spawn(process.execPath, [serverPath, "--http"], {
-    env: { PATH: process.env.PATH, TYPESAFE_API_KEY: "test-key", HOST: "127.0.0.1", PORT: "0", ...env },
+    env: { PATH: process.env.PATH, TYPESAFE_API_KEY: "test-key", HOST: "127.0.0.1", PORT: "0", JEV_BROWSER_ALLOW_PRIVATE_HOSTS: "127.0.0.1", ...env },
     stdio: ["ignore", "ignore", "pipe"],
   });
   let stderr = "";
@@ -176,7 +176,7 @@ test("--http releases the slot when a client disconnects mid tools/call", async 
       req.end(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
     });
   const eventuallyServed = async () => {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 120; i++) { // 30s: covers the SDK 15s SSE keepalive that surfaces a dead socket when nothing else writes
       if ((await post(2, { method: "tools/list" })) === 200) return 200;
       await new Promise((r) => setTimeout(r, 250));
     }

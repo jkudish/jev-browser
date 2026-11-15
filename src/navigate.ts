@@ -3,6 +3,7 @@
 // execution, the deadline is a real AbortSignal threaded through Jev, the
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
+import { assertUrlAllowed, BlockedAddressError, startGuardProxy, type GuardProxy } from "./netguard.js";
 import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request, type Response } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -667,6 +668,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   let browser: Browser | null = null;
   let ownsBrowser = false;
   let observedContext: BrowserContext | null = null;
+  const blockedRequests: string[] = [];
+  let guardProxy: GuardProxy | null = null;
   let onNewPage: ((page: Page) => void) | null = null;
   const observerCleanups: Array<() => void> = [];
   let status = "error";
@@ -706,7 +709,15 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
   try {
     ownsBrowser = !options.page;
-    browser = options.page ? null : await chromium.launch({ headless: process.env.JEV_BROWSER_HEADED !== "1" });
+    if (startUrl) await assertUrlAllowed(startUrl); // refuse before any browser launches
+    if (!options.page) guardProxy = await startGuardProxy({ onBlocked: (m) => blockedRequests.push(m) });
+    browser = options.page
+      ? null
+      : await chromium.launch({
+          headless: process.env.JEV_BROWSER_HEADED !== "1",
+          // <-loopback> removes Chromium's hardcoded localhost bypass so loopback traffic is filtered too.
+          proxy: { server: `http://127.0.0.1:${guardProxy!.port}`, bypass: "<-loopback>" },
+        });
     const context: BrowserContext = options.page
       ? options.page.context()
       : await browser!.newContext({
@@ -714,6 +725,36 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           ...(options.recordDir ? { recordVideo: { dir: options.recordDir } } : {}),
         });
     observedContext = context;
+    // SSRF guard: every browser request (documents, redirect hops, subresources,
+    // iframes) is checked; blocked ones are aborted and recorded.
+    await context.route("**/*", async (route) => {
+      try {
+        await assertUrlAllowed(route.request().url());
+      } catch (e) {
+        if (e instanceof BlockedAddressError) {
+          blockedRequests.push(e.message);
+          await route.abort("blockedbyclient").catch(() => {});
+          return;
+        }
+        throw e;
+      }
+      await route.fallback().catch(() => {});
+    });
+    await context
+      .routeWebSocket(/.*/, async (ws) => {
+        try {
+          await assertUrlAllowed(ws.url());
+        } catch (e) {
+          if (e instanceof BlockedAddressError) {
+            blockedRequests.push(e.message);
+            await ws.close({ code: 1008, reason: "blocked" });
+            return;
+          }
+          throw e;
+        }
+        ws.connectToServer();
+      })
+      .catch(() => {});
     // Seeded before the first navigation (the guards already ran pre-timer;
     // cookies + injected page and cookies + recording were both refused, so
     // this only ever touches a run-owned context).
@@ -746,7 +787,29 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     context.on("page", onNewPage);
 
     if (startUrl) {
-      await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+      try {
+        const nav = page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+        nav.catch(() => {});
+        // A caller cancel must not wait out a stalled navigation (the proxy hop
+        // adds a connection the browser no longer tears down by itself).
+        await Promise.race([
+          nav,
+          new Promise<never>((_, reject) => {
+            // A caller cancel always ends the navigation, even one that landed
+            // while the browser was launching. A spent deadline (maxSeconds 0)
+            // does not: such a run still loads its page and reports a timeout.
+            const cancelled = () => String((controller.signal.reason as Error)?.message).includes("cancelled-by-caller");
+            if (controller.signal.aborted) {
+              if (cancelled()) reject(controller.signal.reason);
+              return;
+            }
+            controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+          }),
+        ]);
+      } catch (e) {
+        if (blockedRequests.length) throw new Error(blockedRequests[0]);
+        throw e;
+      }
     }
 
     // Bot-protection interstitials are walls, not pages to reason about. The
@@ -1190,6 +1253,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       }
     }
 
+    // Proxy first: dropping its upstream sockets lets browser.close() finish at once instead of waiting on stalled requests.
+    await guardProxy?.close().catch(() => {});
     if (ownsBrowser) await browser?.close().catch(() => {});
     const videoPath = (await videoPathPromise?.catch(() => undefined)) ?? null;
     const result = {
@@ -1249,6 +1314,8 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     externalSignal?.removeEventListener("abort", onExternalAbort);
     if (observedContext && onNewPage) observedContext.off("page", onNewPage);
     for (const cleanup of observerCleanups.splice(0).reverse()) cleanup();
+    // Proxy first: dropping its upstream sockets lets browser.close() finish at once instead of waiting on stalled requests.
+    await guardProxy?.close().catch(() => {});
     if (ownsBrowser) await browser?.close().catch(() => {});
   }
 }

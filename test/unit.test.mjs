@@ -15,6 +15,9 @@ import {
 } from "../dist/lib.js";
 import { navigate } from "../dist/navigate.js";
 
+// Fixtures serve from loopback; the SSRF guard blocks that by default.
+process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = "127.0.0.1";
+
 const noJudgment = { name: "fixture", async ask() { assert.fail("timed-out navigation must not request a judgment"); } };
 
 const el = (over = {}) => ({
