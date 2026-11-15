@@ -4,6 +4,9 @@ import { chromium } from "playwright";
 import { askJev, InvalidJevAnswer, resolveTransport } from "../dist/provider.js";
 import { navigate } from "../dist/library.js";
 
+// Injected-page runs are route-layer-only; opt in explicitly (see SECURITY.md).
+process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = "1";
+
 const signal = new AbortController().signal;
 const questions = { item: { type: "choice", criteria: { alpha: "A", beta: "B" } }, yes: { type: "noul" } };
 const answers = { item: { type: "choice", choice: "beta", probabilities: { alpha: 0.2, beta: 0.8 } }, yes: { type: "noul", noul: 0.7 } };

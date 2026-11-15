@@ -3,6 +3,7 @@
 // fetches (e.g. decision calls to a local service) never pass through here.
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { networkInterfaces } from "node:os";
 
 export const ALLOW_ENV = "JEV_BROWSER_ALLOW_PRIVATE_HOSTS";
 
@@ -26,14 +27,21 @@ function normHost(h: string): string {
   return s;
 }
 
-/** Comma-separated entries: `host`, `port` (digits only), or `host:port`. */
+/**
+ * Comma-separated entries: `host` (exact match, no wildcards/subdomains) or `host:port`.
+ * A bare port (e.g. `5000`) is rejected: it would open that port on EVERY host, including
+ * metadata and LAN addresses. Write `127.0.0.1:5000` instead.
+ */
 export function parseAllowList(raw: string | undefined = process.env[ALLOW_ENV]): AllowList {
   const out: AllowList = { hosts: new Set(), ports: new Set(), hostPorts: new Set() };
   for (const part of (raw ?? "").split(",")) {
     const e = part.trim().toLowerCase();
     if (!e) continue;
-    if (/^\d+$/.test(e)) out.ports.add(e);
-    else if (/^\[.*\]:\d+$/.test(e) || /^[^:[\]]+:\d+$/.test(e)) {
+    if (/^\d+$/.test(e)) {
+      throw new Error(
+        `${ALLOW_ENV}: bare port "${e}" is not allowed (it would open that port on every host); write host:port, e.g. 127.0.0.1:${e}`,
+      );
+    } else if (/^\[.*\]:\d+$/.test(e) || /^[^:[\]]+:\d+$/.test(e)) {
       const i = e.lastIndexOf(":");
       out.hostPorts.add(`${normHost(e.slice(0, i))}:${e.slice(i + 1)}`);
     } else out.hosts.add(normHost(e));
@@ -66,6 +74,26 @@ export function parseLegacyIPv4(host: string): number[] | null {
   return [(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255];
 }
 
+/** The host's own interface addresses, as normalized keys (fresh each call; interfaces change). */
+function localAddressKeys(): Set<string> {
+  const keys = new Set<string>();
+  try {
+    for (const rows of Object.values(networkInterfaces())) {
+      for (const r of rows ?? []) {
+        const addr = r.address.split("%")[0];
+        if (isIP(addr) === 4) keys.add(addr);
+        else {
+          const g = parseIPv6(addr);
+          if (g) keys.add(g.join(":"));
+        }
+      }
+    }
+  } catch {
+    // interface enumeration unavailable: nothing extra to block
+  }
+  return keys;
+}
+
 function blockedV4(b: number[]): string | null {
   const [a, c] = b;
   if (a === 0) return "unspecified/this-network (0.0.0.0/8)";
@@ -75,7 +103,10 @@ function blockedV4(b: number[]): string | null {
   if (a === 192 && c === 168) return "private (192.168.0.0/16)";
   if (a === 169 && c === 254) return "link-local/cloud metadata (169.254.0.0/16)";
   if (a === 100 && c >= 64 && c <= 127) return "carrier-grade NAT (100.64.0.0/10)";
+  if (a === 198 && (c === 18 || c === 19)) return "benchmarking (198.18.0.0/15)";
+  if (a === 192 && c === 0 && b[2] === 0) return "IETF protocol assignments (192.0.0.0/24)";
   if (a >= 224) return "multicast/reserved (224.0.0.0/3)";
+  if (localAddressKeys().has(b.join("."))) return "this host's own interface address";
   return null;
 }
 
@@ -102,6 +133,10 @@ function blockedV6(g: number[]): string | null {
   const v4 = [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255];
   const inner = blockedV4(v4);
   if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) return inner && `IPv4-mapped ${inner}`;
+  if (g.slice(0, 4).every((x) => x === 0) && g[4] === 0xffff && g[5] === 0) return inner && `IPv4-translated ${inner}`;
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return "local-use NAT64 (64:ff9b:1::/48)";
+  if (g[0] === 0x2001 && g[1] === 0) return "Teredo (2001::/32)";
+  if (localAddressKeys().has(g.join(":"))) return "this host's own interface address";
   if (g.slice(0, 6).every((x) => x === 0)) return inner && `IPv4-compatible ${inner}`;
   if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return inner && `NAT64 ${inner}`;
   if ((g[0] & 0xfe00) === 0xfc00) return "unique-local (fc00::/7)";
@@ -149,7 +184,7 @@ export class BlockedAddressError extends Error {
     public reason: string,
   ) {
     super(
-      `jev-browser blocked ${url}: ${reason}. Set ${ALLOW_ENV} (comma-separated hosts or ports) to allow deliberate local testing.`,
+      `jev-browser blocked ${url}: ${reason}. Set ${ALLOW_ENV} (comma-separated exact hosts or host:port entries) to allow deliberate local testing.`,
     );
     this.name = "BlockedAddressError";
   }
@@ -177,7 +212,9 @@ export async function assertUrlAllowed(
   try {
     addrs = await (opts.resolver ?? defaultResolver)(verdict.host);
   } catch {
-    return; // unresolvable: the browser fails on its own
+    // Fail closed: with a proxy-less (injected) page the browser resolves DNS itself and could
+    // get a different answer than we could, so an unresolvable name is never waved through.
+    throw new BlockedAddressError(rawUrl, `DNS resolution failed for ${verdict.host}`);
   }
   for (const a of addrs) {
     const v = classifyHost(a);

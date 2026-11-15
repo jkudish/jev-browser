@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { createSocket } from "node:dgram";
+import { networkInterfaces } from "node:os";
 import { test } from "node:test";
 import { assertUrlAllowed, classifyHost, parseAllowList } from "../dist/netguard.js";
 import { navigate } from "../dist/navigate.js";
@@ -57,15 +59,16 @@ test("assertUrlAllowed: DNS names resolving to private addresses are refused (st
     await assert.rejects(() => assertUrlAllowed(`http://${h}/`, { allow: none, resolver }), /resolves to/, h);
   }
   await assertUrlAllowed("http://pub.test/", { allow: none, resolver });
-  await assertUrlAllowed("http://nonexistent.test/", { allow: none, resolver });
+  // Fail closed: an unresolvable name is blocked at the route layer, not waved through.
+  await assert.rejects(() => assertUrlAllowed("http://nonexistent.test/", { allow: none, resolver }), /DNS resolution failed/);
 });
 
 test("allow list: hosts, ports and host:port, default empty", async () => {
   const resolver = async () => ["127.0.0.1"];
   await assert.rejects(() => assertUrlAllowed("http://127.0.0.1:5000/", { allow: parseAllowList(undefined) }));
   await assertUrlAllowed("http://127.0.0.1:5000/", { allow: parseAllowList("127.0.0.1") });
-  await assertUrlAllowed("http://127.0.0.1:5000/", { allow: parseAllowList(" 5000 , 6000") });
-  await assert.rejects(() => assertUrlAllowed("http://127.0.0.1:5001/", { allow: parseAllowList("5000") }));
+  await assertUrlAllowed("http://127.0.0.1:5000/", { allow: parseAllowList(" 127.0.0.1:5000 , 127.0.0.1:6000") });
+  await assert.rejects(() => assertUrlAllowed("http://127.0.0.1:5001/", { allow: parseAllowList("127.0.0.1:5000") }));
   await assertUrlAllowed("http://localhost:5000/", { allow: parseAllowList("localhost:5000") });
   await assert.rejects(() => assertUrlAllowed("http://localhost:5001/", { allow: parseAllowList("localhost:5000") }));
   await assertUrlAllowed("http://[::1]:7/", { allow: parseAllowList("[::1]:7") });
@@ -137,5 +140,73 @@ test("integration: subresources, iframes and redirects to a non-allow-listed por
   } finally {
     if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
     front.close(); secret.close();
+  }
+});
+
+test("allow list: bare ports are rejected with a clear error; host entries stay exact-match", async () => {
+  for (const raw of ["5000", " 8080 ", "127.0.0.1,5000"]) assert.throws(() => parseAllowList(raw), /bare port .* not allowed.*host:port/, raw);
+  parseAllowList("127.0.0.1:5000");
+  const resolver = async () => ["93.184.216.34"];
+  // exact host only: no subdomain / suffix matching
+  await assert.rejects(() => assertUrlAllowed("http://sub.localhost/", { allow: parseAllowList("localhost") }), /blocked/);
+  await assertUrlAllowed("http://localhost/", { allow: parseAllowList("localhost"), resolver });
+});
+
+test("classifier: benchmarking, IETF, NAT64 local-use, IPv4-translated, Teredo ranges", () => {
+  for (const h of ["198.18.0.1", "198.19.255.255", "192.0.0.1", "192.0.0.170", "64:ff9b:1::1", "64:ff9b:1:ffff::1", "::ffff:0:7f00:1", "::ffff:0:a00:1", "2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2"]) blocked(h);
+  for (const h of ["198.17.255.255", "198.20.0.1", "192.0.1.1", "::ffff:0:808:808", "2001:db8::1", "2001:1::1"]) open(h);
+});
+
+test("classifier: the host's own non-loopback interface addresses are private", () => {
+  const own = Object.values(networkInterfaces()).flat().filter(Boolean).map((r) => r.address.split("%")[0]);
+  for (const a of own) blocked(a);
+  for (const a of own.filter((x) => x.includes("."))) blocked(`::ffff:${a}`);
+});
+
+test("navigate: non-http(s) start URLs are refused in the library/CLI path", async () => {
+  for (const u of ["file:///etc/passwd", "data:text/html,hi", "blob:http://a/b", "javascript:alert(1)", "ftp://example.com/", "about:blank", "not a url"]) {
+    await assert.rejects(() => navigate({ task: "x", startUrl: u, maxSeconds: 0, screenshot: "none", transport: judge }), /startUrl/, u);
+  }
+});
+
+test("navigate: an injected page is refused unless the unproxied-page opt-in is set", async () => {
+  const saved = process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE;
+  delete process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE;
+  try {
+    const explosive = new Proxy({}, { get() { throw new Error("page must not be touched"); } });
+    await assert.rejects(() => navigate({ task: "x", page: explosive, transport: judge }), /JEV_BROWSER_ALLOW_UNPROXIED_PAGE/);
+  } finally {
+    if (saved !== undefined) process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = saved;
+  }
+});
+
+test("integration: WebRTC STUN/TURN UDP to loopback never leaves the browser", async () => {
+  const packets = [];
+  const udp = createSocket("udp4");
+  udp.on("message", (m) => packets.push(m.length));
+  await new Promise((r) => udp.bind(0, "127.0.0.1", r));
+  const port = udp.address().port;
+  const web = createServer((req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(`<title>rtc</title><h1>rtc page</h1><script>
+    const pc = new RTCPeerConnection({ iceServers: [
+      { urls: "stun:127.0.0.1:${port}" },
+      { urls: "turn:127.0.0.1:${port}?transport=udp", username: "u", credential: "p" } ] });
+    pc.createDataChannel("d");
+    pc.createOffer().then((o) => pc.setLocalDescription(o));
+  </script>`);
+  });
+  await new Promise((r) => web.listen(0, "127.0.0.1", r));
+  const wp = web.address().port;
+  const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
+  process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${wp}`;
+  try {
+    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${wp}/`, maxSeconds: 0, screenshot: "none", transport: judge });
+    assert.match(r.page?.content ?? "", /rtc page/);
+    await new Promise((res) => setTimeout(res, 4000));
+    assert.deepEqual(packets, [], "UDP listener must receive 0 packets");
+  } finally {
+    if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
+    udp.close(); web.close();
   }
 });

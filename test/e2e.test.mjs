@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 
 // Fixtures serve from loopback; the SSRF guard blocks that by default.
 process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = "127.0.0.1";
+process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = "1";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";

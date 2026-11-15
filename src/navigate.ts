@@ -4,7 +4,7 @@
 // typing generator, and every Playwright timeout, usage is per-run, and the
 // final payload/screenshot extraction is best-effort.
 import { assertUrlAllowed, BlockedAddressError, startGuardProxy, type GuardProxy } from "./netguard.js";
-import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request, type Response } from "playwright";
+import { chromium, type Browser, type BrowserContext, type ConsoleMessage, type Page, type Request, type Response, type Route } from "playwright";
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -551,6 +551,26 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     // rejected before the run starts.
     for (const c of seedCookies) validateSecretBuffer(Buffer.from(c.value, "utf8"), `cookie "${c.name}"`);
   }
+  // Library/CLI path: only http(s) start URLs (file:, data:, blob:, javascript:, ftp: ... are refused;
+  // the MCP schema enforces the same rule). about:blank is only ever used internally.
+  if (startUrl) {
+    let scheme: string;
+    try {
+      scheme = new URL(startUrl).protocol;
+    } catch {
+      throw new Error(`navigate(): startUrl is not a valid URL: ${JSON.stringify(startUrl)}`);
+    }
+    if (scheme !== "http:" && scheme !== "https:") {
+      throw new Error(`navigate(): startUrl must be an http(s) URL, got ${scheme}`);
+    }
+  }
+  // A caller-supplied page runs in the caller's browser, which is NOT behind the filtering proxy
+  // (redirect hops and DNS are only checked at the route layer). Refuse unless explicitly opted in.
+  if (options.page && process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE !== "1") {
+    throw new Error(
+      "navigate(): an injected page is not behind the SSRF filtering proxy; set JEV_BROWSER_ALLOW_UNPROXIED_PAGE=1 to accept route-layer-only protection",
+    );
+  }
   let redactor: Redactor | null = null;
   let trustedOrigin: string | null = null;
   let passwordValue: string | null = null;
@@ -670,6 +690,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   let observedContext: BrowserContext | null = null;
   const blockedRequests: string[] = [];
   let guardProxy: GuardProxy | null = null;
+  let unrouteGuards: (() => void) | null = null;
   let onNewPage: ((page: Page) => void) | null = null;
   const observerCleanups: Array<() => void> = [];
   let status = "error";
@@ -715,6 +736,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       ? null
       : await chromium.launch({
           headless: process.env.JEV_BROWSER_HEADED !== "1",
+          // Without this, RTCPeerConnection STUN/TURN UDP bypasses the HTTP proxy and can reach loopback/private hosts.
+          args: [
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+          ],
           // <-loopback> removes Chromium's hardcoded localhost bypass so loopback traffic is filtered too.
           proxy: { server: `http://127.0.0.1:${guardProxy!.port}`, bypass: "<-loopback>" },
         });
@@ -727,7 +753,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     observedContext = context;
     // SSRF guard: every browser request (documents, redirect hops, subresources,
     // iframes) is checked; blocked ones are aborted and recorded.
-    await context.route("**/*", async (route) => {
+    const routeHandler = async (route: Route) => {
       try {
         await assertUrlAllowed(route.request().url());
       } catch (e) {
@@ -739,7 +765,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         throw e;
       }
       await route.fallback().catch(() => {});
-    });
+    };
+    await context.route("**/*", routeHandler);
+    unrouteGuards = () => {
+      void context.unroute("**/*", routeHandler).catch(() => {});
+    };
     await context
       .routeWebSocket(/.*/, async (ws) => {
         try {
@@ -1314,6 +1344,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     externalSignal?.removeEventListener("abort", onExternalAbort);
     if (observedContext && onNewPage) observedContext.off("page", onNewPage);
     for (const cleanup of observerCleanups.splice(0).reverse()) cleanup();
+    if (!ownsBrowser) unrouteGuards?.();
     // Proxy first: dropping its upstream sockets lets browser.close() finish at once instead of waiting on stalled requests.
     await guardProxy?.close().catch(() => {});
     if (ownsBrowser) await browser?.close().catch(() => {});
