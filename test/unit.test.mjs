@@ -193,6 +193,7 @@ import {
   makeRedactor,
   validateSecretBuffer,
   readHandoffSecret,
+  ensureHandoffDir,
   readSecretFromEnv,
   assertNoPlaywrightDebug,
   PASSWORD_REDACTED,
@@ -443,11 +444,19 @@ test("buildActionSpace offers fill_password only when a password source is activ
   assert.match(nameless.elements[0].description, /"password"/);
 });
 
+const IS_WIN = process.platform === "win32";
+
 test("readHandoffSecret consumes a valid one-shot file and deletes it", async () => {
   const dir = await mkdtemp(join(tmpdir(), "jev-handoff-"));
   await chmod(dir, 0o700);
   const file = join(dir, "pw.1");
   await writeFile(file, "super-secret-value", { mode: 0o600 });
+  if (IS_WIN) {
+    // Fail closed: POSIX ownership/mode checks cannot be enforced on Windows.
+    await assert.rejects(() => readHandoffSecret(file, dir), /unsupported on Windows/);
+    await rm(dir, { recursive: true, force: true });
+    return;
+  }
   const buf = await readHandoffSecret(file, dir);
   assert.equal(buf.toString(), "super-secret-value");
   await assert.rejects(() => stat(file), /ENOENT/); // unlinked after read
@@ -463,6 +472,18 @@ test("readHandoffSecret rejects the attack shapes", async () => {
   await assert.rejects(() => readHandoffSecret("relative/path", dir), /absolute/);
   await assert.rejects(() => readHandoffSecret("/etc/passwd", dir), /inside the handoff directory/);
   await assert.rejects(() => readHandoffSecret(dir, dir), /inside the handoff directory/); // the dir itself
+  if (IS_WIN) {
+    // Lexical shape checks above still run first; everything touching the
+    // filesystem must be refused outright on win32 (fail closed).
+    const nested = join(dir, "sub", "pw");
+    await assert.rejects(() => readHandoffSecret(nested, dir), /directly inside/);
+    for (const p of [good, join(dir, "missing")]) {
+      await assert.rejects(() => readHandoffSecret(p, dir), /unsupported on Windows/);
+    }
+    await assert.rejects(() => ensureHandoffDir(dir), /unsupported on Windows/);
+    await rm(dir, { recursive: true, force: true });
+    return;
+  }
   const subdir = join(dir, "subdir");
   await mkdir(subdir, { mode: 0o700 });
   await assert.rejects(() => readHandoffSecret(subdir, dir), /regular file/); // a directory, not a file

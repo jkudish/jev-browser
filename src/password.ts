@@ -47,13 +47,23 @@ export function handoffDir(): string {
   return process.env.JEV_BROWSER_HANDOFF_DIR || resolve(homedir(), ".jev-browser", "handoff");
 }
 
+export const WIN32_HANDOFF_UNSUPPORTED =
+  "password handoff via secret file is unsupported on Windows; POSIX ownership/mode checks cannot be enforced";
+
+/** Fail closed: POSIX uid/mode semantics do not exist on win32, so never trust them there. */
+function assertHandoffSupported(): number {
+  if (process.platform === "win32" || typeof process.getuid !== "function") throw new Error(WIN32_HANDOFF_UNSUPPORTED);
+  return process.getuid();
+}
+
 /** The handoff directory must be a private directory owned by this user. */
 export async function ensureHandoffDir(dir = handoffDir()): Promise<void> {
+  const uid = assertHandoffSupported();
   const resolved = resolve(dir);
   const st = await lstat(resolved).catch(() => null);
   if (st) {
     if (!st.isDirectory()) throw new Error(`handoff directory ${resolved} is not a directory`);
-    if (st.uid !== process.getuid!()) throw new Error(`handoff directory ${resolved} is not owned by this user`);
+    if (st.uid !== uid) throw new Error(`handoff directory ${resolved} is not owned by this user`);
     if ((st.mode & 0o777) !== 0o700) {
       throw new Error(`handoff directory ${resolved} must be mode 0700; run chmod 700 on it or point JEV_BROWSER_HANDOFF_DIR elsewhere`);
     }
@@ -73,7 +83,7 @@ export async function ensureHandoffDir(dir = handoffDir()): Promise<void> {
     real === null ||
     real !== resolved ||
     !after?.isDirectory() ||
-    after.uid !== process.getuid!() ||
+    after.uid !== uid ||
     (after.mode & 0o777) !== 0o700
   ) {
     throw new Error(`handoff directory ${resolved} must be a symlink-free 0700 directory owned by this user`);
@@ -156,13 +166,14 @@ export async function readHandoffSecret(path: string, dir = handoffDir(), what =
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel) || rel.includes("/") || rel.includes("\\")) {
     throw new Error(`${what} must be a file directly inside the handoff directory ${resolvedDir}, not a nested path`);
   }
+  const uid = assertHandoffSupported();
   await ensureHandoffDir(resolvedDir);
   const fh = await open(resolvedPath, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
   let unlinked = false;
   try {
     const st = await fh.stat(); // fstat on the pinned descriptor
     if (!st.isFile()) throw new Error(`${what} is not a regular file`);
-    if (st.uid !== process.getuid!()) throw new Error(`${what} is not owned by this user`);
+    if (st.uid !== uid) throw new Error(`${what} is not owned by this user`);
     if ((st.mode & 0o777) !== 0o600) throw new Error(`${what} must be mode 0600; run chmod 600 on it and retry`);
     if (st.nlink !== 1) throw new Error(`${what} has multiple hard links`);
     if (st.size === 0) throw new Error(`${what} is empty`);
