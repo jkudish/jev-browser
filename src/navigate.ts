@@ -770,8 +770,19 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     unrouteGuards = () => {
       void context.unroute("**/*", routeHandler).catch(() => {});
     };
+    // Playwright has no unrouteWebSocket: deactivate by flag so a borrowed context is not left guarded.
+    let wsGuardActive = true;
+    const prevUnroute = unrouteGuards;
+    unrouteGuards = () => {
+      wsGuardActive = false;
+      prevUnroute?.();
+    };
     await context
       .routeWebSocket(/.*/, async (ws) => {
+        if (!wsGuardActive) {
+          ws.connectToServer();
+          return;
+        }
         try {
           await assertUrlAllowed(ws.url());
         } catch (e) {

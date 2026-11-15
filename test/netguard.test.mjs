@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
+import { connect as netConnect, createServer as createNetServer } from "node:net";
 import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
 import { test } from "node:test";
-import { assertUrlAllowed, classifyHost, parseAllowList } from "../dist/netguard.js";
+import { assertUrlAllowed, classifyHost, parseAllowList, startGuardProxy } from "../dist/netguard.js";
 import { navigate } from "../dist/navigate.js";
 
 const none = parseAllowList("");
@@ -230,5 +231,138 @@ test("integration: WebRTC STUN/TURN UDP to loopback never leaves the browser", a
   } finally {
     if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
     udp.close(); web.close();
+  }
+});
+
+test("proxy CONNECT: client reset during DNS does not raise an unhandled error", async () => {
+  const errors = [];
+  const onUncaught = (e) => errors.push(e);
+  process.on("uncaughtException", onUncaught);
+  const proxy = await startGuardProxy({ allow: none, resolver: () => new Promise((r) => setTimeout(() => r(["93.184.216.34"]), 300)) });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    c.write("CONNECT slow.test:443 HTTP/1.1\r\nHost: slow.test:443\r\n\r\n");
+    await new Promise((r) => setTimeout(r, 50));
+    c.resetAndDestroy();
+    await new Promise((r) => setTimeout(r, 600));
+    assert.deepEqual(errors.map(String), []);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    await proxy.close();
+  }
+});
+
+test("proxy CONNECT: falls back across validated addresses without re-resolving", async () => {
+  let lookups = 0;
+  const target = createNetServer((s) => s.end("hello"));
+  await new Promise((r) => target.listen(0, "127.0.0.1", r));
+  const port = target.address().port;
+  // 127.0.0.2 refuses (target is bound to 127.0.0.1 only), so the second validated address must be used.
+  const proxy = await startGuardProxy({
+    allow: parseAllowList("multi.test"),
+    resolver: async () => { lookups++; return ["127.0.0.2", "127.0.0.1"]; },
+  });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    let buf = "";
+    c.on("data", (d) => (buf += d));
+    c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    c.write(`CONNECT multi.test:${port} HTTP/1.1\r\nHost: multi.test:${port}\r\n\r\n`);
+    await new Promise((r) => c.once("close", r));
+    assert.match(buf, /^HTTP\/1\.1 200 /);
+    assert.match(buf, /hello/);
+    assert.equal(lookups, 1);
+  } finally {
+    await proxy.close();
+    target.close();
+  }
+});
+
+test("proxy CONNECT: every address stays validated (mixed public/private is refused)", async () => {
+  const blockedMsgs = [];
+  const proxy = await startGuardProxy({ allow: none, resolver: async () => ["93.184.216.34", "127.0.0.1"], onBlocked: (m) => blockedMsgs.push(m) });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    let buf = "";
+    c.on("data", (d) => (buf += d));
+    c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    c.write("CONNECT mixed.test:443 HTTP/1.1\r\nHost: mixed.test:443\r\n\r\n");
+    await new Promise((r) => c.once("close", r));
+    assert.match(buf, /403/);
+    assert.equal(blockedMsgs.length, 1);
+  } finally {
+    await proxy.close();
+  }
+});
+
+test("proxy HTTP: truncated upstream body terminates the browser-facing response", async () => {
+  const up = createNetServer((s) => {
+    s.once("data", () => {
+      s.write("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial");
+      setTimeout(() => s.destroy(), 50);
+    });
+  });
+  await new Promise((r) => up.listen(0, "127.0.0.1", r));
+  const port = up.address().port;
+  const proxy = await startGuardProxy({ allow: parseAllowList(`127.0.0.1:${port}`) });
+  try {
+    const outcome = await new Promise((resolve) => {
+      const req = httpRequest({ host: "127.0.0.1", port: proxy.port, method: "GET", path: `http://127.0.0.1:${port}/`, headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        res.on("data", () => {});
+        res.on("end", () => resolve(res.complete ? "complete" : "truncated"));
+        res.on("aborted", () => resolve("aborted"));
+        res.on("error", () => resolve("error"));
+        res.on("close", () => resolve(res.complete ? "complete" : "closed-incomplete"));
+      });
+      req.on("error", () => resolve("req-error"));
+      req.end();
+      setTimeout(() => resolve("hung"), 3000);
+    });
+    assert.notEqual(outcome, "complete");
+    assert.notEqual(outcome, "hung");
+  } finally {
+    await proxy.close();
+    up.close();
+  }
+});
+
+test("navigate: borrowed page (unproxied opt-in) leaves no active WebSocket guard on the caller's context", async () => {
+  const saved = process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE;
+  process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = "1";
+  let wsHandler = null;
+  let unrouted = 0;
+  const context = {
+    route: async () => {},
+    unroute: async () => { unrouted++; },
+    routeWebSocket: async (_p, h) => { wsHandler = h; },
+    addCookies: async () => {},
+    setDefaultTimeout: () => {},
+    on: () => {},
+    off: () => {},
+  };
+  const page = new Proxy({}, {
+    get(_t, k) {
+      if (k === "context") return () => context;
+      if (k === "on" || k === "off") return () => {};
+      if (k === "url") return () => "about:blank";
+      if (k === "then") return undefined;
+      return () => Promise.reject(new Error("stub page"));
+    },
+  });
+  try {
+    await navigate({ task: "x", page, maxSeconds: 2, maxSteps: 1, screenshot: "none", transport: judge }).catch(() => {});
+    assert.ok(wsHandler, "guard installed during the run");
+    assert.equal(unrouted, 1, "http route guard removed");
+    let connected = 0;
+    let closed = 0;
+    await wsHandler({ url: () => "ws://127.0.0.1:9/", connectToServer: () => { connected++; }, close: async () => { closed++; } });
+    assert.equal(connected, 1, "guard is pass-through after the run");
+    assert.equal(closed, 0);
+  } finally {
+    if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE; else process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = saved;
   }
 });

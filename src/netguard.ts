@@ -231,16 +231,18 @@ export async function assertUrlAllowed(
 import http from "node:http";
 import net from "node:net";
 
-async function resolveValidated(host: string, port: string, allow: AllowList, resolver: Resolver): Promise<string> {
+// Returns every validated address (in resolver order) so callers can fall back across them
+// without a fresh, unchecked lookup.
+async function resolveValidated(host: string, port: string, allow: AllowList, resolver: Resolver): Promise<string[]> {
   const h = normHost(host);
   const verdict = classifyHost(h);
   const ok = allowed(verdict.host, port, allow);
   if (verdict.blocked && !ok) throw new BlockedAddressError(`${h}:${port}`, verdict.reason ?? "blocked host");
   if (verdict.literal) {
-    if (verdict.blocked || net.isIP(h)) return h;
+    if (verdict.blocked || net.isIP(h)) return [h];
     const b = parseLegacyIPv4(h);
-    if (b) return b.join(".");
-    return h;
+    if (b) return [b.join(".")];
+    return [h];
   }
   const addrs = await resolver(h);
   if (!addrs.length) throw new Error(`no address for ${h}`);
@@ -250,7 +252,7 @@ async function resolveValidated(host: string, port: string, allow: AllowList, re
       if (v.blocked) throw new BlockedAddressError(`${h}:${port}`, `host ${h} resolves to ${a}: ${v.reason}`);
     }
   }
-  return addrs[0];
+  return addrs;
 }
 
 export interface GuardProxy {
@@ -277,13 +279,19 @@ export async function startGuardProxy(opts: {
       const u = new URL(req.url ?? "");
       if (u.protocol !== "http:") throw new BlockedAddressError(req.url ?? "", "unsupported proxy scheme");
       const port = u.port || "80";
-      const ip = await resolveValidated(u.hostname, port, allow, resolver);
+      const ip = (await resolveValidated(u.hostname, port, allow, resolver))[0];
       const headers = { ...req.headers };
       delete headers["proxy-connection"];
       const up = http.request(
         { host: ip, port: Number(port), method: req.method, path: u.pathname + u.search, headers: { ...headers, host: u.host } },
         (r) => {
           res.writeHead(r.statusCode ?? 502, r.headers);
+          // A truncated upstream body must not look like a complete response to the browser.
+          r.on("aborted", () => res.destroy());
+          r.on("error", () => res.destroy());
+          r.on("close", () => {
+            if (!r.complete) res.destroy();
+          });
           r.pipe(res);
         },
       );
@@ -300,24 +308,52 @@ export async function startGuardProxy(opts: {
     s.on("close", () => sockets.delete(s));
   });
   server.on("connect", async (req, client, head) => {
+    // Attach before awaiting DNS: a client reset during resolution must not surface as an unhandled 'error'.
+    let clientGone = false;
+    let up: net.Socket | null = null;
+    client.on("error", () => {
+      clientGone = true;
+      up?.destroy();
+    });
+    client.on("close", () => {
+      clientGone = true;
+      up?.destroy();
+    });
     try {
       const i = (req.url ?? "").lastIndexOf(":");
       const host = (req.url ?? "").slice(0, i);
       const port = (req.url ?? "").slice(i + 1) || "443";
-      const ip = await resolveValidated(host, port, allow, resolver);
-      const up = net.connect(Number(port), ip, () => {
+      const ips = await resolveValidated(host, port, allow, resolver);
+      if (clientGone) return;
+      // Try each validated address in turn; never re-resolve.
+      for (let n = 0; n < ips.length; n++) {
+        const sock = await new Promise<net.Socket | null>((resolve) => {
+          const c = net.connect(Number(port), ips[n]);
+          sockets.add(c);
+          c.on("close", () => sockets.delete(c));
+          up = c;
+          c.once("connect", () => resolve(c));
+          c.once("error", () => {
+            c.destroy();
+            resolve(null);
+          });
+        });
+        if (clientGone) {
+          sock?.destroy();
+          return;
+        }
+        if (!sock) continue;
+        sock.on("error", () => client.destroy());
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length) up.write(head);
-        up.pipe(client);
-        client.pipe(up);
-      });
-      sockets.add(up);
-      up.on("close", () => sockets.delete(up));
-      up.on("error", () => client.destroy());
-      client.on("error", () => up.destroy());
+        if (head.length) sock.write(head);
+        sock.pipe(client);
+        client.pipe(sock);
+        return;
+      }
+      client.destroy();
     } catch (e) {
       if (e instanceof BlockedAddressError) opts.onBlocked?.(e.message);
-      client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      if (!client.destroyed) client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     }
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
