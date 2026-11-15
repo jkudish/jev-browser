@@ -847,8 +847,11 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           nav,
           new Promise<never>((_, reject) => {
             // A caller cancel always ends the navigation, even one that landed
-            // while the browser was launching. A spent deadline (maxSeconds 0)
-            // does not: such a run still loads its page and reports a timeout.
+            // while the browser was launching. A deadline that spent while the
+            // browser launched (e.g. maxSeconds 0 with a literal-IP start URL, which
+            // skips the DNS preflight race) does not: such a run still loads its page
+            // and reports a timeout. A hostname start URL ends as a timeout during
+            // the DNS preflight instead and never reaches this point.
             const cancelled = () => String((controller.signal.reason as Error)?.message).includes("cancelled-by-caller");
             if (controller.signal.aborted) {
               if (cancelled()) reject(controller.signal.reason);

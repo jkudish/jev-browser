@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer, request as httpRequest } from "node:http";
+import { Agent as HttpAgent, createServer, request as httpRequest } from "node:http";
 import { connect as netConnect, createServer as createNetServer, Socket as NetSocket } from "node:net";
 import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
@@ -627,4 +627,46 @@ test("navigate: cancellation that lands as DNS resolves stops the run before any
   assert.equal(r.status, "error");
   assert.match(r.error ?? "", /cancelled-by-caller/);
   assert.ok(r.elapsed_ms < 2000, "no browser launch time spent");
+});
+
+test("proxy HTTP: many requests on one keep-alive client socket leave no accumulated close listeners", async () => {
+  const origin = createServer((req, res) => res.end("ok"));
+  await new Promise((r) => origin.listen(0, "127.0.0.1", r));
+  const oport = origin.address().port;
+  const proxy = await startGuardProxy({ allow: parseAllowList(`127.0.0.1:${oport}`) });
+  const warnings = [];
+  const onWarning = (w) => warnings.push(w);
+  process.on("warning", onWarning);
+  const agent = new HttpAgent({ keepAlive: true, maxSockets: 1 });
+  try {
+    for (let i = 0; i < 15; i++) {
+      const body = await new Promise((resolve, reject) => {
+        const rq = httpRequest({ host: "127.0.0.1", port: proxy.port, path: `http://127.0.0.1:${oport}/${i}`, headers: { host: `127.0.0.1:${oport}` }, agent }, (r) => {
+          let d = "";
+          r.setEncoding("utf8");
+          r.on("data", (c) => (d += c));
+          r.on("end", () => resolve(d));
+        });
+        rq.on("error", reject);
+        rq.end();
+      });
+      assert.equal(body, "ok");
+    }
+    await new Promise((r) => setImmediate(r)); // process warnings are emitted on a later tick
+    assert.deepEqual(warnings.filter((w) => w.name === "MaxListenersExceededWarning").map((w) => w.message), []);
+  } finally {
+    process.off("warning", onWarning);
+    agent.destroy();
+    await proxy.close();
+    origin.close();
+  }
+});
+
+test("navigate: pre-aborted caller signal with a literal-IP start URL stops before any proxy or browser start", async () => {
+  const ctl = new AbortController();
+  ctl.abort();
+  const r = await navigate({ task: "x", startUrl: "http://93.184.216.34/", maxSeconds: 60, screenshot: "none", transport: judge }, ctl.signal);
+  assert.equal(r.status, "error");
+  assert.match(r.error ?? "", /cancelled-by-caller/);
+  assert.ok(r.elapsed_ms < 1500, "no browser launch time spent");
 });

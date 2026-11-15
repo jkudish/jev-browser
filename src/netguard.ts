@@ -327,12 +327,19 @@ export async function startGuardProxy(opts: {
     // resolution must never result in an upstream connection being created.
     let gone = false;
     let up: http.ClientRequest | null = null;
+    const sock = req.socket;
     const teardown = () => {
       gone = true;
       up?.destroy();
     };
-    res.on("close", teardown);
-    req.socket.once("close", teardown);
+    // The socket outlives the request on keep-alive: drop this request's listener when it ends so
+    // listeners never accumulate on a long-lived client connection.
+    const onResClose = () => {
+      sock.off("close", teardown);
+      teardown();
+    };
+    res.once("close", onResClose);
+    sock.once("close", teardown);
     try {
       const u = new URL(req.url ?? "");
       if (u.protocol !== "http:") throw new BlockedAddressError(req.url ?? "", "unsupported proxy scheme");
