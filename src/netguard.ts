@@ -266,6 +266,8 @@ export async function startGuardProxy(opts: {
   onBlocked?: (message: string) => void;
   /** Per-address CONNECT dial timeout (default 5000ms). */
   connectTimeoutMs?: number;
+  /** Test seam: dial an already-validated address (default net.connect). */
+  dial?: (port: number, ip: string) => net.Socket;
 }): Promise<GuardProxy> {
   const allow = opts.allow ?? parseAllowList();
   const resolver = opts.resolver ?? defaultResolver;
@@ -331,7 +333,7 @@ export async function startGuardProxy(opts: {
       // Try each validated address in turn; never re-resolve.
       for (let n = 0; n < ips.length; n++) {
         const sock = await new Promise<net.Socket | null>((resolve) => {
-          const c = net.connect(Number(port), ips[n]);
+          const c = (opts.dial ?? ((p, h) => net.connect(p, h)))(Number(port), ips[n]);
           sockets.add(c);
           up = c;
           let settled = false;

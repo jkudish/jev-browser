@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
-import { connect as netConnect, createServer as createNetServer } from "node:net";
+import { connect as netConnect, createServer as createNetServer, Socket as NetSocket } from "node:net";
 import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
 import { test } from "node:test";
@@ -281,15 +281,28 @@ test("proxy CONNECT: falls back across validated addresses without re-resolving"
   }
 });
 
-test("proxy CONNECT: a stalled address times out and falls through to the next validated address", async () => {
+test("proxy CONNECT: a stalled address hits the connect timeout and falls through to the next validated address", async () => {
   const target = createNetServer((s) => s.end("hello"));
   await new Promise((r) => target.listen(0, "127.0.0.1", r));
   const port = target.address().port;
-  // 192.0.2.1 (TEST-NET-1) is unroutable: it either hangs (timeout path) or fails fast; both must fall through.
+  const TIMEOUT = 300;
+  const dialed = [];
+  let stalled = null;
+  let destroyedEarly = null;
+  // Dial stub: the first address yields a socket that never emits connect/error/close, so only the timer can end it.
   const proxy = await startGuardProxy({
     allow: parseAllowList("stall.test"),
-    connectTimeoutMs: 200,
+    connectTimeoutMs: TIMEOUT,
     resolver: async () => ["192.0.2.1", "127.0.0.1"],
+    dial: (p, ip) => {
+      dialed.push(ip);
+      if (ip === "192.0.2.1") {
+        stalled = new NetSocket();
+        setTimeout(() => (destroyedEarly = stalled.destroyed), TIMEOUT / 2);
+        return stalled;
+      }
+      return netConnect(p, ip);
+    },
   });
   try {
     const c = netConnect(proxy.port, "127.0.0.1");
@@ -300,9 +313,14 @@ test("proxy CONNECT: a stalled address times out and falls through to the next v
     const t0 = Date.now();
     c.write(`CONNECT stall.test:${port} HTTP/1.1\r\nHost: stall.test:${port}\r\n\r\n`);
     await new Promise((r) => c.once("close", r));
+    const elapsed = Date.now() - t0;
+    assert.deepEqual(dialed, ["192.0.2.1", "127.0.0.1"]);
+    assert.equal(destroyedEarly, false, "stalled socket must still be pending before the timeout");
+    assert.ok(stalled.destroyed, "timeout destroys the stalled socket");
+    assert.ok(elapsed >= TIMEOUT - 30, `elapsed ${elapsed}ms should be >= connect timeout`);
+    assert.ok(elapsed < TIMEOUT + 3000);
     assert.match(buf, /^HTTP\/1\.1 200 /);
     assert.match(buf, /hello/);
-    assert.ok(Date.now() - t0 < 3000);
   } finally {
     await proxy.close();
     target.close();
