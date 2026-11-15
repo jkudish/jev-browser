@@ -76,6 +76,22 @@ test("allow list: hosts, ports and host:port, default empty", async () => {
   await assert.rejects(() => assertUrlAllowed("http://10.0.0.1/", { allow: parseAllowList("127.0.0.1") }));
 });
 
+// Judge that records the page state it is shown and immediately declares done,
+// so the run loads and captures the page under a realistic time budget.
+const doneJudge = (states, before) => ({
+  name: "fixture",
+  async ask({ state, questions }) {
+    if (before) await before;
+    states.push(state);
+    const answers = {};
+    for (const [id, q] of Object.entries(questions)) {
+      answers[id] = q.type === "noul"
+        ? { type: "noul", noul: 0 }
+        : { type: "choice", choice: "done", confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map((k) => [k, k === "done" ? 1 : 0])) };
+    }
+    return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+  },
+});
 const judge = { name: "fixture", async ask() { assert.fail("no judgment expected"); } };
 
 test("integration: browser refuses a loopback server by default; allow list opens it", async () => {
@@ -118,18 +134,22 @@ test("integration: subresources, iframes and redirects to a non-allow-listed por
   const secret = createServer((req, res) => { secretHits.push(req.url); res.end("secret"); });
   await new Promise((r) => secret.listen(0, "127.0.0.1", r));
   const sp = secret.address().port;
+  let beaconed; const beacon = new Promise((r) => { beaconed = r; });
   const front = createServer((req, res) => {
+    if (req.url === "/beacon") { beaconed(); return res.end("ok"); }
     if (req.url === "/redir") { res.statusCode = 302; res.setHeader("location", `http://127.0.0.1:${sp}/redir`); return res.end(); }
     res.setHeader("content-type", "text/html");
-    res.end(`<title>front</title><h1>front ok</h1><img src="http://127.0.0.1:${sp}/img.png"><iframe src="http://127.0.0.1:${sp}/frame"></iframe><script>fetch("http://127.0.0.1:${sp}/xhr").catch(()=>{})</script>`);
+    res.end(`<title>front</title><h1>front ok</h1><img id="i" src="http://127.0.0.1:${sp}/img.png"><iframe src="http://127.0.0.1:${sp}/frame"></iframe><script>const imgDone = new Promise((r) => { const i = document.getElementById("i"); i.onerror = i.onload = r; if (i.complete) r(); }); Promise.all([fetch("http://127.0.0.1:${sp}/xhr").catch(()=>{}), imgDone]).then(() => fetch("/beacon"))</script>`);
   });
   await new Promise((r) => front.listen(0, "127.0.0.1", r));
   const fp = front.address().port;
   const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
   process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${fp}`;
   try {
-    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${fp}/`, maxSeconds: 0, screenshot: "none", transport: judge });
-    assert.match(r.page?.content ?? "", /front ok/);
+    const states = [];
+    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${fp}/`, maxSeconds: 15, maxSteps: 1, screenshot: "none", transport: doneJudge(states, Promise.race([beacon, new Promise((res) => setTimeout(res, 8000))])) });
+    assert.equal(r.status, "done", `${r.status}: ${r.error}`);
+    assert.match(states[0]?.page_text_excerpt ?? "", /front ok/);
     await new Promise((res) => setTimeout(res, 500));
     assert.deepEqual(secretHits, []);
     assert.ok((r.console_events ?? []).some((e) => e.type === "request_failed" && /BLOCKED_BY_CLIENT/i.test(e.text)), "blocked subresources are reported");
@@ -201,8 +221,10 @@ test("integration: WebRTC STUN/TURN UDP to loopback never leaves the browser", a
   const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
   process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${wp}`;
   try {
-    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${wp}/`, maxSeconds: 0, screenshot: "none", transport: judge });
-    assert.match(r.page?.content ?? "", /rtc page/);
+    const states = [];
+    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${wp}/`, maxSeconds: 15, maxSteps: 1, screenshot: "none", transport: doneJudge(states) });
+    assert.equal(r.status, "done", `${r.status}: ${r.error}`);
+    assert.match(states[0]?.page_text_excerpt ?? "", /rtc page/);
     await new Promise((res) => setTimeout(res, 4000));
     assert.deepEqual(packets, [], "UDP listener must receive 0 packets");
   } finally {
