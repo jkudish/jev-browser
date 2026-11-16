@@ -349,12 +349,14 @@ export async function startGuardProxy(opts: {
         res.destroy();
         return;
       }
+      let gotResponse = false;
       const headers = { ...req.headers };
       delete headers["proxy-connection"];
       const request = http.request(
         // agent:false: no connection pooling, so every upstream socket belongs to exactly one tracked request.
         { host: ip, port: Number(port), method: req.method, path: u.pathname + u.search, headers: { ...headers, host: u.host }, agent: false },
         (r) => {
+          gotResponse = true;
           try {
             res.writeHead(r.statusCode ?? 502, r.statusMessage, forwardableHeaders(r.headers));
           } catch {
@@ -375,7 +377,10 @@ export async function startGuardProxy(opts: {
       up = request;
       upstreams.add(request);
       request.on("close", () => upstreams.delete(request));
-      request.on("error", () => {
+      let failed = false;
+      const failRequest = () => {
+        if (failed) return;
+        failed = true;
         if (res.headersSent) res.destroy();
         else if (!res.destroyed) {
           try {
@@ -384,6 +389,22 @@ export async function startGuardProxy(opts: {
             res.destroy();
           }
         }
+      };
+      request.on("error", failRequest);
+      // Non-response terminal events: an origin that answers a plain request with an unsolicited
+      // 101 (Node emits 'upgrade') or a CONNECT-style reply ('connect') never reaches the response
+      // callback. The proxy never tunnels these, so tear the upstream socket down and fail only
+      // this request instead of leaving the browser-facing response hanging.
+      const rejectNonResponse = (_r: unknown, upSock: net.Socket) => {
+        upSock?.destroy();
+        request.destroy();
+        failRequest();
+      };
+      request.on("upgrade", rejectNonResponse);
+      request.on("connect", rejectNonResponse);
+      // Upstream gone before any response (and without an 'error'): never leave the client hanging.
+      request.on("close", () => {
+        if (!gotResponse) failRequest();
       });
       req.pipe(request);
     } catch (e) {

@@ -556,14 +556,24 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // Library/CLI path: only http(s) start URLs (file:, data:, blob:, javascript:, ftp: ... are refused;
   // the MCP schema enforces the same rule). about:blank is only ever used internally.
   if (startUrl) {
+    // This region runs before the run's redactor exists. On a credential run (password or seed
+    // cookie) a caller-supplied start URL can carry the secret (e.g. a malformed `https//x/?token=<pw>`,
+    // or a scheme that is the secret), so these errors never quote it; plain runs keep the detail.
+    const credentialRun = Boolean(options.password) || Boolean(options.cookies?.length);
     let scheme: string;
     try {
       scheme = new URL(startUrl).protocol;
     } catch {
-      throw new Error(`navigate(): startUrl is not a valid URL: ${JSON.stringify(startUrl)}`);
+      throw new Error(
+        credentialRun
+          ? "navigate(): startUrl is not a valid URL (value withheld on credential runs)"
+          : `navigate(): startUrl is not a valid URL: ${JSON.stringify(startUrl)}`,
+      );
     }
     if (scheme !== "http:" && scheme !== "https:") {
-      throw new Error(`navigate(): startUrl must be an http(s) URL, got ${scheme}`);
+      throw new Error(
+        credentialRun ? "navigate(): startUrl must be an http(s) URL (scheme withheld on credential runs)" : `navigate(): startUrl must be an http(s) URL, got ${scheme}`,
+      );
     }
   }
   // A caller-supplied page runs in the caller's browser, which is NOT behind the filtering proxy

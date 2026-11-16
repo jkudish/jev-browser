@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseCookieSpec } from "./lib.js";
 import { navigate, type NavigateOptions } from "./navigate.js";
-import { assertNoPlaywrightDebug, parseTrustedOrigin, readSecretFromPath, readSecretFromStdin, validateSecretBuffer } from "./password.js";
+import { assertNoPlaywrightDebug, makeRedactor, parseTrustedOrigin, readSecretFromPath, readSecretFromStdin, validateSecretBuffer } from "./password.js";
 
 interface CliArgs extends NavigateOptions {
   screenshotPath?: string;
@@ -193,7 +193,10 @@ export async function runCli(argv: string[]): Promise<number> {
       // one stderr line and exit code 2, never a stack trace. The return
       // still passes through the outer finally, so scratch recording
       // directories are cleaned up on this path too.
-      console.error(`navigate: ${(error as Error).message}`);
+      // Defense in depth: whatever the message quotes, the run's own secrets never reach stderr.
+      const secrets = [password?.value, ...(navigateArgs.cookies ?? []).map((c: { value: string }) => c.value)].filter((v): v is string => typeof v === "string" && v !== "");
+      const message = String((error as Error)?.message ?? error);
+      console.error(`navigate: ${secrets.length ? makeRedactor(secrets).redact(message) : message}`);
       return 2;
     }
     if (recordPath?.endsWith(".webm") && result.video_path) {

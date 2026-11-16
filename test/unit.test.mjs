@@ -1708,3 +1708,69 @@ browserTest("ARIA menu items are actionable and same-length dialog updates count
     server.close();
   }
 });
+
+// ── Pre-redactor error paths must not echo a credential carried in the start URL ──
+const PRE_SECRET = "pre-redactor-secret-123";
+const MALFORMED = `https//example.com/?token=${PRE_SECRET}`;
+const SECRET_SCHEME = `${PRE_SECRET}:x`;
+
+test("navigate: a malformed start URL carrying the password is never quoted in the rejection", async () => {
+  for (const bad of [MALFORMED, SECRET_SCHEME]) {
+    await assert.rejects(
+      () => navigate({ task: "x", startUrl: bad, maxSeconds: 0, screenshot: "none", password: { value: PRE_SECRET, origin: "https://example.com" } }),
+      (e) => {
+        assert.match(e.message, /startUrl/);
+        assert.ok(!e.message.includes(PRE_SECRET), `leaked: ${e.message}`);
+        return true;
+      },
+      bad,
+    );
+  }
+});
+
+test("navigate: a malformed start URL on a seed-cookie run never echoes the URL", async () => {
+  for (const bad of [MALFORMED, SECRET_SCHEME]) {
+    await assert.rejects(
+      () => navigate({ task: "x", startUrl: bad, maxSeconds: 0, screenshot: "none", cookies: [{ name: "sid", value: PRE_SECRET }] }),
+      (e) => {
+        assert.ok(!e.message.includes(PRE_SECRET), `leaked: ${e.message}`);
+        return true;
+      },
+      bad,
+    );
+  }
+});
+
+test("resolveCookies: a bad start URL is not quoted in the error", () => {
+  for (const bad of [MALFORMED, SECRET_SCHEME]) {
+    assert.throws(() => resolveCookies([{ name: "x", value: "abcdefgh" }], bad), (e) => !e.message.includes(PRE_SECRET) && /start URL/.test(e.message));
+  }
+});
+
+test("navigate: non-credential runs keep the useful start URL in the error", async () => {
+  await assert.rejects(() => navigate({ task: "x", startUrl: "not a url", maxSeconds: 0, screenshot: "none" }), /not a valid URL: "not a url"/);
+  await assert.rejects(() => navigate({ task: "x", startUrl: "ftp://example.com/", maxSeconds: 0, screenshot: "none" }), /got ftp:/);
+});
+
+test("cli: a malformed start URL with a password file leaves the password out of stderr", async () => {
+  const { runCli } = await import("../dist/cli.js");
+  const dir = await mkdtemp(join(tmpdir(), "jev-cli-redact-"));
+  const pwFile = join(dir, "pw");
+  await writeFile(pwFile, PRE_SECRET, { mode: 0o600 });
+  const lines = [];
+  const origErr = console.error;
+  const origLog = console.log;
+  console.error = (...a) => lines.push(a.join(" "));
+  console.log = (...a) => lines.push(a.join(" "));
+  try {
+    const code = await runCli(["do it", MALFORMED, "--password-file", pwFile, "--password-origin", "https://example.com", "--no-screenshot"]);
+    assert.equal(code, 2);
+  } finally {
+    console.error = origErr;
+    console.log = origLog;
+    await rm(dir, { recursive: true, force: true });
+  }
+  const out = lines.join("\n");
+  assert.ok(out.length > 0, "an error line is printed");
+  assert.ok(!out.includes(PRE_SECRET), `leaked: ${out}`);
+});

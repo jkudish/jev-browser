@@ -581,10 +581,11 @@ export function resolveCookies(
   try {
     url = new URL(startUrl);
   } catch {
-    throw new Error(`seed cookies need a valid start URL, got: ${JSON.stringify(startUrl)}`);
+    // Seed cookies make this a credential run and no redactor exists yet: never quote the caller's URL.
+    throw new Error("seed cookies need a valid start URL (value withheld: it may carry a credential)");
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`seed cookies need an http(s) start URL, got: ${JSON.stringify(startUrl)}`);
+    throw new Error("seed cookies need an http(s) start URL (value withheld: it may carry a credential)");
   }
   return cookies.map((c) => {
     // The error describes the problem without quoting the cookie: the value

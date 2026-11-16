@@ -675,3 +675,64 @@ test("navigate: pre-aborted caller signal with a literal-IP start URL stops befo
   assert.match(r.error ?? "", /cancelled-by-caller/);
   assert.ok(r.elapsed_ms < 1500, "no browser launch time spent");
 });
+
+// A plain-HTTP origin that answers an ordinary request with an unsolicited 101 (Node emits 'upgrade' on the
+// ClientRequest, never the response callback) or closes before any response must fail only that request.
+for (const [label, reply] of [
+  ["unsolicited 101 Switching Protocols", "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"],
+  ["close before any response", null],
+]) {
+  test(`proxy HTTP: ${label} from the origin fails fast and the proxy keeps serving`, async () => {
+    const errors = [];
+    const onUncaught = (e) => errors.push(e);
+    process.on("uncaughtException", onUncaught);
+    const upstreamSockets = [];
+    let mode = "bad";
+    const origin = createNetServer((s) => {
+      upstreamSockets.push(s);
+      s.on("error", () => {});
+      s.once("data", () => {
+        if (mode === "good") return s.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        if (reply) s.write(reply);
+        else s.destroy();
+      });
+    });
+    await new Promise((r) => origin.listen(0, "127.0.0.1", r));
+    const port = origin.address().port;
+    const proxy = await startGuardProxy({ allow: parseAllowList(`127.0.0.1:${port}`) });
+    const get = () =>
+      new Promise((resolve) => {
+        const req = httpRequest({ host: "127.0.0.1", port: proxy.port, method: "GET", path: `http://127.0.0.1:${port}/`, headers: { host: `127.0.0.1:${port}` }, agent: false }, (res) => {
+          let body = "";
+          res.on("data", (d) => (body += d));
+          res.on("end", () => resolve({ status: res.statusCode, body }));
+          res.on("error", () => resolve({ error: true }));
+        });
+        req.on("error", () => resolve({ error: true }));
+        req.end();
+        setTimeout(() => resolve({ hung: true }), 3000);
+      });
+    try {
+      const t0 = Date.now();
+      const out = await get();
+      assert.notEqual(out.hung, true, "client must not be left hanging");
+      assert.ok(Date.now() - t0 < 2000, "failure must be prompt, not a timeout");
+      assert.ok(out.error || out.status === 502, `expected a failure, got ${JSON.stringify(out)}`);
+      assert.notEqual(out.status, 101);
+      if (reply) {
+        // The upstream socket must have been torn down by the proxy.
+        await new Promise((r) => setTimeout(r, 100));
+        assert.ok(upstreamSockets.every((s) => s.destroyed || s.readableEnded), "upstream socket must be closed");
+      }
+      assert.deepEqual(errors.map(String), [], "process must not see an uncaught exception");
+      mode = "good";
+      const again = await get();
+      assert.equal(again.status, 200, "the proxy keeps serving afterwards");
+      assert.equal(again.body, "ok");
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      await proxy.close();
+      origin.close();
+    }
+  });
+}
