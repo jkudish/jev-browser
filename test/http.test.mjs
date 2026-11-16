@@ -7,6 +7,9 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
+// Skipped by `npm run test:unit` (JEV_TEST_UNIT): launches Chromium.
+const browserTest = process.env.JEV_TEST_UNIT ? test.skip : test;
+
 const serverPath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 const TOKEN = "test-token-0123456789abcdef";
 
@@ -155,7 +158,7 @@ test("--http advertises a static tool list and refuses subscriptions/listen with
   }
 });
 
-test("--http releases the slot when a client disconnects mid tools/call", async () => {
+browserTest("--http releases the slot when a client disconnects mid tools/call", async () => {
   // A TCP server that accepts connections and never responds keeps the
   // navigation in flight long enough to disconnect from it.
   const stall = createServer(() => {});

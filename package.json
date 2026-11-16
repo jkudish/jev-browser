@@ -41,7 +41,7 @@
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/unit.test.mjs test/transports.test.mjs test/http.test.mjs test/netguard.test.mjs",
-    "test:unit": "node --import ./test/helpers/unit-mode.mjs --test --test-force-exit test/unit.test.mjs test/transports.test.mjs test/netguard.test.mjs",
+    "test:unit": "node --import ./test/helpers/unit-mode.mjs --test --test-force-exit test/unit.test.mjs test/transports.test.mjs test/http.test.mjs test/netguard.test.mjs",
     "test:e2e": "node --test test/e2e.test.mjs",
     "postinstall": "node scripts/ensure-chromium.mjs"
   },
