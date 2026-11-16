@@ -169,6 +169,77 @@ browserTest("integration: subresources, iframes and redirects to a non-allow-lis
   }
 });
 
+// A stalled main document (headers + partial body, never finished) that references a private subresource: the
+// subresource is blocked and recorded while goto() is still waiting. When the deadline / a caller cancel then ends
+// the run, that abort must be reported, not replaced by the unrelated subresource block message.
+async function stalledFront(secretPort) {
+  let beaconed; const beacon = new Promise((r) => { beaconed = r; });
+  const open = [];
+  const front = createServer((req, res) => {
+    if (req.url === "/beacon") { beaconed(); return res.end("ok"); }
+    open.push(res);
+    res.setHeader("content-type", "text/html");
+    res.write(`<title>stall</title><img id="i" src="http://127.0.0.1:${secretPort}/img.png"><script>const i = document.getElementById("i"); const f = () => fetch("/beacon"); i.onerror = i.onload = f; if (i.complete) f();</script>`);
+    // never res.end(): domcontentloaded cannot fire
+  });
+  await new Promise((r) => front.listen(0, "127.0.0.1", r));
+  return { front, beacon, port: front.address().port, close: () => { for (const r of open) r.destroy(); front.closeAllConnections?.(); front.close(); } };
+}
+
+for (const mode of ["deadline", "cancel"]) {
+  browserTest(`navigate: blocked private subresource then ${mode} during a stalled main navigation reports the ${mode}, not the block`, async () => {
+    const secretHits = [];
+    const secret = createServer((req, res) => { secretHits.push(req.url); res.end("secret"); });
+    await new Promise((r) => secret.listen(0, "127.0.0.1", r));
+    const sf = await stalledFront(secret.address().port);
+    const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
+    process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${sf.port}`;
+    const ctl = new AbortController();
+    try {
+      const run = navigate({ task: "x", startUrl: `http://127.0.0.1:${sf.port}/`, maxSeconds: mode === "deadline" ? 12 : 60, screenshot: "none", transport: judge }, ctl.signal);
+      if (mode === "cancel") sf.beacon.then(() => ctl.abort());
+      const r = await run;
+      const beaconSeen = await Promise.race([sf.beacon.then(() => true), new Promise((res) => setTimeout(() => res(false), 0))]);
+      assert.ok(beaconSeen, "the private subresource was blocked before the run ended");
+      assert.deepEqual(secretHits, []);
+      if (mode === "deadline") {
+        assert.equal(r.status, "timeout", `${r.status}: ${r.error}`);
+        assert.match(r.error ?? "", /deadline/);
+      } else {
+        assert.equal(r.status, "error");
+        assert.match(r.error ?? "", /cancelled-by-caller/);
+      }
+      assert.doesNotMatch(r.error ?? "", /blocked/);
+    } finally {
+      if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
+      sf.close(); secret.close();
+    }
+  });
+}
+
+// GUARD: a main navigation that really is blocked (redirect to a non-allow-listed private port) still ends as an
+// error carrying the block message, and never reaches the target.
+browserTest("navigate: a genuinely blocked main navigation (redirect to a private port) still fails closed as error with the block message (guard)", async () => {
+  const secretHits = [];
+  const secret = createServer((req, res) => { secretHits.push(req.url); res.end("secret"); });
+  await new Promise((r) => secret.listen(0, "127.0.0.1", r));
+  const sp = secret.address().port;
+  const front = createServer((req, res) => { res.statusCode = 302; res.setHeader("location", `http://127.0.0.1:${sp}/x`); res.end(); });
+  await new Promise((r) => front.listen(0, "127.0.0.1", r));
+  const fp = front.address().port;
+  const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
+  process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${fp}`;
+  try {
+    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${fp}/`, maxSeconds: 30, screenshot: "none", transport: judge });
+    assert.equal(r.status, "error");
+    assert.match(r.error ?? "", /blocked .*loopback/);
+    assert.deepEqual(secretHits, []);
+  } finally {
+    if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
+    front.close(); secret.close();
+  }
+});
+
 test("allow list: bare ports are rejected with a clear error; host entries stay exact-match", async () => {
   for (const raw of ["5000", " 8080 ", "127.0.0.1,5000"]) assert.throws(() => parseAllowList(raw), /bare port .* not allowed.*host:port/, raw);
   parseAllowList("127.0.0.1:5000");

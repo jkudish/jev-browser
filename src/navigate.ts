@@ -871,7 +871,10 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           }),
         ]);
       } catch (e) {
-        if (blockedRequests.length) throw new Error(blockedRequests[0]);
+        // Substitute the block message only when the main navigation itself failed. A deadline /
+        // caller-cancel rejection is the run signal's own reason (identity, not message text) and
+        // must survive an unrelated blocked subresource recorded while goto() was waiting.
+        if (blockedRequests.length && !(controller.signal.aborted && e === controller.signal.reason)) throw new Error(blockedRequests[0]);
         throw e;
       }
     }
