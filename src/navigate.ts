@@ -51,13 +51,13 @@ export function blockTargetKey(raw: string): string {
     if (raw.includes("://")) {
       const u = new URL(raw);
       const port = u.port || (u.protocol === "https:" ? "443" : u.protocol === "http:" ? "80" : "");
-      return `${u.hostname.replace(/^\[|\]$/g, "").toLowerCase()}:${port}`;
+      return `${u.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase()}:${port}`;
     }
   } catch {
     return raw.toLowerCase();
   }
   const m = /^(.*):(\d+)$/.exec(raw);
-  return m ? `${m[1].replace(/^\[|\]$/g, "").toLowerCase()}:${m[2]}` : raw.toLowerCase();
+  return m ? `${m[1].replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase()}:${m[2]}` : raw.toLowerCase();
 }
 
 export interface NavigateOptions {

@@ -350,6 +350,8 @@ test("blockTargetKey normalises proxy block targets and navigation URLs to the s
   assert.equal(blockTargetKey("http://rebind.test:8080/"), "rebind.test:8080");
   assert.equal(blockTargetKey("[::1]:9"), "::1:9");
   assert.equal(blockTargetKey("http://[::1]:9/"), "::1:9");
+  assert.equal(blockTargetKey("http://a.test./"), blockTargetKey("a.test:80"));
+  assert.equal(blockTargetKey("https://localhost.:8443/x"), blockTargetKey("localhost:8443"));
   assert.notEqual(blockTargetKey("http://a.test/"), blockTargetKey("http://b.test/"));
 });
 
