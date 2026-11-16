@@ -15,6 +15,10 @@ import {
 } from "../dist/lib.js";
 import { navigate } from "../dist/navigate.js";
 
+// `npm run test:unit` sets JEV_TEST_UNIT=1 to skip tests that launch Chromium
+// (or need the network); `npm test` runs everything.
+const browserTest = process.env.JEV_TEST_UNIT ? test.skip : test;
+
 // Fixtures serve from loopback; the SSRF guard blocks that by default.
 process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = "127.0.0.1";
 process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = "1";
@@ -598,7 +602,7 @@ test("assertNoPlaywrightDebug refuses debug modes that log filled values", () =>
   }
 });
 
-test("navigate reuses an injected Playwright page and leaves its lifecycle to the caller", async (t) => {
+browserTest("navigate reuses an injected Playwright page and leaves its lifecycle to the caller", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -670,7 +674,7 @@ test("navigate requires startUrl when no page is supplied", async () => {
   await assert.rejects(() => navigate({ task: "x" }), /startUrl is required/);
 });
 
-test("navigate refuses credential runs on a recording injected page", async (t) => {
+browserTest("navigate refuses credential runs on a recording injected page", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -703,7 +707,7 @@ test("navigate refuses credential runs on a recording injected page", async (t) 
   }
 });
 
-test("injected credential pages suppress the screenshot even before any fill", async (t) => {
+browserTest("injected credential pages suppress the screenshot even before any fill", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -881,6 +885,7 @@ test("classifyTypingFailure separates provider failures from local configuration
 
 // ── Typing generator execution (dist/navigate.js, network patched out) ───────
 import { createTypingGenerator, generateTextToType } from "../dist/navigate.js";
+
 
 function chatCompletion(content, finishReason = "stop") {
   return new Response(
@@ -1382,7 +1387,7 @@ test("navigate refuses cookie values that could never be redacted reliably", asy
   );
 });
 
-test("cookie runs are credential runs end to end: seeded, gated, redacted, unscreenrecorded", async (t) => {
+browserTest("cookie runs are credential runs end to end: seeded, gated, redacted, unscreenrecorded", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -1424,16 +1429,34 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    // maxSeconds 0: the loop breaks at step 1 before any model call; the
-    // navigation, seeding, redaction, and result assembly still run.
+    // A realistic time budget: with maxSeconds 0 the start-URL goto is capped
+    // at 250ms, which flakes under load. The judge declares done at step 1 and
+    // records what it was shown, so the model-facing state is checked too.
+    const judged = [];
+    const doneJudge = {
+      name: "fixture",
+      async ask({ state, questions }) {
+        judged.push(JSON.stringify(state));
+        const answers = {};
+        for (const [id, q] of Object.entries(questions)) {
+          answers[id] = q.type === "noul"
+            ? { type: "noul", noul: 0 }
+            : { type: "choice", choice: "done", confidence: 1, probabilities: Object.fromEntries(Object.keys(q.criteria).map((k) => [k, k === "done" ? 1 : 0])) };
+        }
+        return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+      },
+    };
     const result = await navigate({
       task: "Read the newest order",
       startUrl: origin + "/orders",
-      maxSeconds: 0,
+      maxSeconds: 30,
+      maxSteps: 1,
       cookies: [{ name: "session", value: VALUE }],
-      transport: noJudgment,
+      transport: doneJudge,
     });
-    assert.equal(result.status, "timeout");
+    assert.equal(result.status, "done", `${result.status}: ${result.error}`);
+    assert.ok(judged.length > 0, "the judge must have been shown the page");
+    assert.ok(judged.every((j) => !j.includes(VALUE)), "the cookie value must not reach the judge");
     // The cookie actually seeded: the document 403s without it.
     assert.equal(gatedDocuments, 0, "the fixture saw the document request without the cookie");
     assert.ok(documentCookie.split(";").some((part) => part.trim() === "session=" + VALUE), "the server must receive the seeded cookie");
@@ -1454,7 +1477,7 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
   }
 });
 
-test("the judged excerpt is the open dialog, else the text on screen", async (t) => {
+browserTest("the judged excerpt is the open dialog, else the text on screen", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -1512,7 +1535,7 @@ test("the judged excerpt is the open dialog, else the text on screen", async (t)
   }
 });
 
-test("credential runs judge the page-start excerpt so split-span secrets stay redactable", async (t) => {
+browserTest("credential runs judge the page-start excerpt so split-span secrets stay redactable", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -1565,7 +1588,7 @@ test("credential runs judge the page-start excerpt so split-span secrets stay re
   }
 });
 
-test("only modal dialogs hijack the excerpt; a plain open dialog and an empty viewport do not", async (t) => {
+browserTest("only modal dialogs hijack the excerpt; a plain open dialog and an empty viewport do not", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -1627,7 +1650,7 @@ test("only modal dialogs hijack the excerpt; a plain open dialog and an empty vi
   }
 });
 
-test("ARIA menu items are actionable and same-length dialog updates count as changes", async (t) => {
+browserTest("ARIA menu items are actionable and same-length dialog updates count as changes", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();

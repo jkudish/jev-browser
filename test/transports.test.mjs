@@ -4,6 +4,11 @@ import { chromium } from "playwright";
 import { askJev, InvalidJevAnswer, resolveTransport } from "../dist/provider.js";
 import { navigate } from "../dist/library.js";
 
+// `npm run test:unit` sets JEV_TEST_UNIT=1 to skip tests that launch Chromium
+// (or need the network); `npm test` runs everything.
+const browserTest = process.env.JEV_TEST_UNIT ? test.skip : test;
+
+
 // Injected-page runs are route-layer-only; opt in explicitly (see SECURITY.md).
 process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = "1";
 
@@ -222,7 +227,7 @@ test("all adapters distinguish absent usage from malformed containers and presen
   }
 });
 
-test("injected transport drives both call sites and malformed second-stage answer executes nothing", async (t) => {
+browserTest("injected transport drives both call sites and malformed second-stage answer executes nothing", async (t) => {
   let browser;
   try {
     browser = await chromium.launch();
@@ -294,7 +299,7 @@ test("injected transport drives both call sites and malformed second-stage answe
   } finally { await browser.close(); }
 });
 
-test("disclosures and custom toggles expose state and execute one native action", async () => {
+browserTest("disclosures and custom toggles expose state and execute one native action", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
@@ -331,7 +336,7 @@ test("disclosures and custom toggles expose state and execute one native action"
   } finally { await browser.close(); }
 });
 
-test("control observations use bounded state tokens, never field values or arbitrary ARIA strings", async () => {
+browserTest("control observations use bounded state tokens, never field values or arbitrary ARIA strings", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();

@@ -7,6 +7,11 @@ import { test } from "node:test";
 import { assertUrlAllowed, classifyHost, parseAllowList, startGuardProxy } from "../dist/netguard.js";
 import { navigate } from "../dist/navigate.js";
 
+// `npm run test:unit` sets JEV_TEST_UNIT=1 to skip tests that launch Chromium
+// (or need the network); `npm test` runs everything.
+const browserTest = process.env.JEV_TEST_UNIT ? test.skip : test;
+
+
 const none = parseAllowList("");
 const blocked = (h) => assert.equal(classifyHost(h).blocked, true, `${h} should be blocked`);
 const open = (h) => assert.equal(classifyHost(h).blocked, false, `${h} should be allowed`);
@@ -119,7 +124,7 @@ test("integration: browser refuses a loopback server by default; allow list open
   }
 });
 
-test("integration: public site is still reachable (skipped offline)", async (t) => {
+browserTest("integration: public site is still reachable (skipped offline)", async (t) => {
   const online = await fetch("https://example.com/", { signal: AbortSignal.timeout(5000) }).then((r) => r.ok, () => false);
   if (!online) return t.skip("offline");
   delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
@@ -130,7 +135,7 @@ test("integration: public site is still reachable (skipped offline)", async (t) 
   assert.doesNotMatch(String(r.error), /blocked/);
 });
 
-test("integration: subresources, iframes and redirects to a non-allow-listed port are blocked", async () => {
+browserTest("integration: subresources, iframes and redirects to a non-allow-listed port are blocked", async () => {
   const secretHits = [];
   const secret = createServer((req, res) => { secretHits.push(req.url); res.end("secret"); });
   await new Promise((r) => secret.listen(0, "127.0.0.1", r));
@@ -154,7 +159,7 @@ test("integration: subresources, iframes and redirects to a non-allow-listed por
     await new Promise((res) => setTimeout(res, 500));
     assert.deepEqual(secretHits, []);
     assert.ok((r.console_events ?? []).some((e) => e.type === "request_failed" && /BLOCKED_BY_CLIENT/i.test(e.text)), "blocked subresources are reported");
-    const red = await navigate({ task: "x", startUrl: `http://127.0.0.1:${fp}/redir`, maxSeconds: 0, screenshot: "none", transport: judge });
+    const red = await navigate({ task: "x", startUrl: `http://127.0.0.1:${fp}/redir`, maxSeconds: 30, screenshot: "none", transport: judge });
     assert.equal(red.status, "error");
     assert.match(red.error ?? "", /blocked .*loopback/);
     assert.deepEqual(secretHits, [], "redirect target must never be contacted");
@@ -201,7 +206,7 @@ test("navigate: an injected page is refused unless the unproxied-page opt-in is 
   }
 });
 
-test("integration: WebRTC STUN/TURN UDP to loopback never leaves the browser", async () => {
+browserTest("integration: WebRTC STUN/TURN UDP to loopback never leaves the browser", async () => {
   const packets = [];
   const udp = createSocket("udp4");
   udp.on("message", (m) => packets.push(m.length));
