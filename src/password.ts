@@ -520,90 +520,103 @@ export function makeRedactor(secrets: string | string[]): Redactor {
   }
   const hexVal = (c: number): number =>
     c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1;
-  let scratchBytes = new Uint16Array(0);
-  let scratchStarts = new Int32Array(0);
+  // Streaming matcher state. Memory is O(longest pattern), independent of input length: a ring of
+  // the text offsets (and "first byte of its text unit" flags) of the last maxPatternLen decoded
+  // bytes. Whether a byte is the last of its unit, and where that unit ends, is known at emit time.
+  let maxPatternLen = 1;
+  for (const v of patterns) if (v.length > maxPatternLen) maxPatternLen = v.length;
+  let ringSize = 1;
+  while (ringSize < maxPatternLen + 1) ringSize <<= 1;
+  const ringMask = ringSize - 1;
+  const ringStart = new Int32Array(ringSize);
+  const ringFirst = new Uint8Array(ringSize);
+  const kmpState = new Int32Array(patterns.length);
+  let raw: Array<[number, number]> = [];
+  let n = 0; // decoded bytes emitted so far
+  let st = 0; // Aho-Corasick state
+  // Feeds one decoded byte of the text unit starting at `start` (ending at `end`). A match must
+  // begin on a unit's first byte and end on a unit's last byte (always true for valid UTF-8
+  // patterns; the check keeps a malformed stream from yielding a half-character span).
+  const emit = (b: number, start: number, first: number, last: boolean, end: number): void => {
+    const i = n++;
+    const slot = i & ringMask;
+    ringStart[slot] = start;
+    ringFirst[slot] = first;
+    if (acNext) {
+      // Only the longest pattern ending at a state is reported: any shorter one ending there is a
+      // suffix of it, so its span is contained in the longer span.
+      st = b > 255 ? 0 : acNext[st * 256 + b];
+      const m = acLen[st];
+      if (m > 0 && last) {
+        const a = (i - m + 1) & ringMask;
+        if (ringFirst[a] === 1) raw.push([ringStart[a], end]);
+      }
+    } else {
+      for (let pi = 0; pi < patterns.length; pi++) {
+        const v = patterns[pi];
+        let k = kmpState[pi];
+        if (k === 0 && b !== v[0]) continue;
+        const f = patternFailures[pi], m = v.length;
+        while (k > 0 && b !== v[k]) k = f[k - 1];
+        if (b === v[k]) k++;
+        if (k === m) {
+          if (last) {
+            const a = (i - m + 1) & ringMask;
+            if (ringFirst[a] === 1) raw.push([ringStart[a], end]);
+          }
+          k = f[k - 1];
+        }
+        kmpState[pi] = k;
+      }
+    }
+  };
   // Returns merged [start, end) spans of s whose percent-decoding contains a secret.
   const matchSpans = (s: string): Array<[number, number]> => {
     if (patterns.length === 0 || s.indexOf("%") < 0) return [];
     const len = s.length;
-    if (scratchBytes.length < len * 3) {
-      scratchBytes = new Uint16Array(len * 3);
-      scratchStarts = new Int32Array(len * 3);
-    }
-    const bytes = scratchBytes, starts = scratchStarts;
-    let n = 0;
+    raw = [];
+    n = 0;
+    st = 0;
+    kmpState.fill(0);
     for (let i = 0; i < len; ) {
       const c = s.charCodeAt(i);
       if (c === 37 && i + 2 < len && hexVal(s.charCodeAt(i + 1)) >= 0 && hexVal(s.charCodeAt(i + 2)) >= 0) {
-        starts[n] = i;
-        bytes[n++] = hexVal(s.charCodeAt(i + 1)) * 16 + hexVal(s.charCodeAt(i + 2));
+        emit(hexVal(s.charCodeAt(i + 1)) * 16 + hexVal(s.charCodeAt(i + 2)), i, 1, true, i + 3);
         i += 3;
       } else if (c < 0x80) {
-        starts[n] = i;
-        bytes[n++] = c;
+        emit(c, i, 1, true, i + 1);
         i++;
       } else if (c < 0x800) {
-        starts[n] = i; bytes[n++] = 0xc0 | (c >> 6);
-        starts[n] = i; bytes[n++] = 0x80 | (c & 63);
+        emit(0xc0 | (c >> 6), i, 1, false, i + 1);
+        emit(0x80 | (c & 63), i, 0, true, i + 1);
         i++;
       } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < len && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
         const cp = 0x10000 + ((c - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
-        starts[n] = i; bytes[n++] = 0xf0 | (cp >> 18);
-        starts[n] = i; bytes[n++] = 0x80 | ((cp >> 12) & 63);
-        starts[n] = i; bytes[n++] = 0x80 | ((cp >> 6) & 63);
-        starts[n] = i; bytes[n++] = 0x80 | (cp & 63);
+        emit(0xf0 | (cp >> 18), i, 1, false, i + 2);
+        emit(0x80 | ((cp >> 12) & 63), i, 0, false, i + 2);
+        emit(0x80 | ((cp >> 6) & 63), i, 0, false, i + 2);
+        emit(0x80 | (cp & 63), i, 0, true, i + 2);
         i += 2;
       } else if (c >= 0xd800 && c <= 0xdfff) {
-        starts[n] = i; bytes[n++] = 0x100; // lone surrogate: matches nothing
+        emit(0x100, i, 1, true, i + 1); // lone surrogate: matches nothing
         i++;
       } else {
-        starts[n] = i; bytes[n++] = 0xe0 | (c >> 12);
-        starts[n] = i; bytes[n++] = 0x80 | ((c >> 6) & 63);
-        starts[n] = i; bytes[n++] = 0x80 | (c & 63);
+        emit(0xe0 | (c >> 12), i, 1, false, i + 1);
+        emit(0x80 | ((c >> 6) & 63), i, 0, false, i + 1);
+        emit(0x80 | (c & 63), i, 0, true, i + 1);
         i++;
       }
     }
-    const raw: Array<[number, number]> = [];
-    // A match must begin and end on a text-unit boundary (always true for valid UTF-8 patterns;
-    // the check keeps a malformed stream from yielding a half-character span).
-    const hit = (i: number, m: number): void => {
-      const a = i - m + 1;
-      if ((a === 0 || starts[a - 1] !== starts[a]) && (i + 1 >= n || starts[i + 1] !== starts[i])) {
-        raw.push([starts[a], i + 1 < n ? starts[i + 1] : len]);
-      }
-    };
-    if (acNext) {
-      // Only the longest pattern ending at a state is reported: any shorter one ending there is a
-      // suffix of it, so its span is contained in the longer span.
-      let st = 0;
-      for (let i = 0; i < n; i++) {
-        const b = bytes[i];
-        st = b > 255 ? 0 : acNext[st * 256 + b];
-        if (acLen[st] > 0) hit(i, acLen[st]);
-      }
-    } else {
-      for (let pi = 0; pi < patterns.length; pi++) {
-        const v = patterns[pi], f = patternFailures[pi], m = v.length;
-        let k = 0;
-        for (let i = 0; i < n; i++) {
-          const b = bytes[i];
-          while (k > 0 && b !== v[k]) k = f[k - 1];
-          if (b === v[k]) k++;
-          if (k === m) {
-            hit(i, m);
-            k = f[k - 1];
-          }
-        }
-      }
-    }
-    if (raw.length === 0) return raw;
-    raw.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
-    const merged: Array<[number, number]> = [raw[0]];
-    for (let i = 1; i < raw.length; i++) {
+    const found = raw;
+    raw = [];
+    if (found.length === 0) return found;
+    found.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
+    const merged: Array<[number, number]> = [found[0]];
+    for (let i = 1; i < found.length; i++) {
       const last = merged[merged.length - 1];
-      if (raw[i][0] <= last[1]) {
-        if (raw[i][1] > last[1]) last[1] = raw[i][1];
-      } else merged.push(raw[i]);
+      if (found[i][0] <= last[1]) {
+        if (found[i][1] > last[1]) last[1] = found[i][1];
+      } else merged.push(found[i]);
     }
     return merged;
   };

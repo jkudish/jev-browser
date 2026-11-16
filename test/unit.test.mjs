@@ -1924,3 +1924,190 @@ test("redactor byte matcher agrees with and without the single-automaton fast pa
   const small = makeRedactor(["alpha-secret-1", "beta-secret-22"]);
   assert.equal(small.redact("%61lpha%2Dsecret-1 beta%2dsecret%2D22"), `${PASSWORD_REDACTED} ${PASSWORD_REDACTED}`);
 });
+
+// ── Redactor decoded-stream matcher: bounded memory + differential check ────────────────────────
+// Reference oracle: the original whole-input matchSpans (decode into a full-length byte/offset
+// array, then KMP each pattern), kept verbatim so the streaming implementation is checked against it.
+const oracleSpans = (s, pats) => {
+  const patterns = pats.map((x) => Uint8Array.from(Buffer.from(x, "utf8")));
+  const fails = patterns.map((v) => {
+    const f = new Int32Array(v.length);
+    let k = 0;
+    for (let i = 1; i < v.length; i++) {
+      while (k > 0 && v[i] !== v[k]) k = f[k - 1];
+      if (v[i] === v[k]) k++;
+      f[i] = k;
+    }
+    return f;
+  });
+  const hexVal = (c) => (c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1);
+  if (s.indexOf("%") < 0) return [];
+  const len = s.length;
+  const bytes = new Uint16Array(len * 3), starts = new Int32Array(len * 3);
+  let n = 0;
+  for (let i = 0; i < len; ) {
+    const c = s.charCodeAt(i);
+    if (c === 37 && i + 2 < len && hexVal(s.charCodeAt(i + 1)) >= 0 && hexVal(s.charCodeAt(i + 2)) >= 0) {
+      starts[n] = i;
+      bytes[n++] = hexVal(s.charCodeAt(i + 1)) * 16 + hexVal(s.charCodeAt(i + 2));
+      i += 3;
+    } else if (c < 0x80) {
+      starts[n] = i; bytes[n++] = c; i++;
+    } else if (c < 0x800) {
+      starts[n] = i; bytes[n++] = 0xc0 | (c >> 6);
+      starts[n] = i; bytes[n++] = 0x80 | (c & 63);
+      i++;
+    } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < len && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
+      const cp = 0x10000 + ((c - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
+      starts[n] = i; bytes[n++] = 0xf0 | (cp >> 18);
+      starts[n] = i; bytes[n++] = 0x80 | ((cp >> 12) & 63);
+      starts[n] = i; bytes[n++] = 0x80 | ((cp >> 6) & 63);
+      starts[n] = i; bytes[n++] = 0x80 | (cp & 63);
+      i += 2;
+    } else if (c >= 0xd800 && c <= 0xdfff) {
+      starts[n] = i; bytes[n++] = 0x100; i++;
+    } else {
+      starts[n] = i; bytes[n++] = 0xe0 | (c >> 12);
+      starts[n] = i; bytes[n++] = 0x80 | ((c >> 6) & 63);
+      starts[n] = i; bytes[n++] = 0x80 | (c & 63);
+      i++;
+    }
+  }
+  const raw = [];
+  const hit = (i, m) => {
+    const a = i - m + 1;
+    if ((a === 0 || starts[a - 1] !== starts[a]) && (i + 1 >= n || starts[i + 1] !== starts[i])) raw.push([starts[a], i + 1 < n ? starts[i + 1] : len]);
+  };
+  for (let pi = 0; pi < patterns.length; pi++) {
+    const v = patterns[pi], f = fails[pi], m = v.length;
+    let k = 0;
+    for (let i = 0; i < n; i++) {
+      const b = bytes[i];
+      while (k > 0 && b !== v[k]) k = f[k - 1];
+      if (b === v[k]) k++;
+      if (k === m) { hit(i, m); k = f[k - 1]; }
+    }
+  }
+  if (raw.length === 0) return raw;
+  raw.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
+  const merged = [raw[0]];
+  for (let i = 1; i < raw.length; i++) {
+    const last = merged[merged.length - 1];
+    if (raw[i][0] <= last[1]) { if (raw[i][1] > last[1]) last[1] = raw[i][1]; } else merged.push(raw[i]);
+  }
+  return merged;
+};
+// Reference redact for lowercase-alphanumeric/multibyte values, whose only variants are the
+// literal and the encodeURIComponent forms (both hex cases).
+const oracleRedact = (s, vals) => {
+  const spans = oracleSpans(s, vals);
+  let out = "", at = 0;
+  for (const [a, b] of spans) { out += s.slice(at, a) + PASSWORD_REDACTED; at = b; }
+  out += s.slice(at);
+  const variants = new Set();
+  for (const x of vals) {
+    const e = encodeURIComponent(x);
+    variants.add(x); variants.add(e); variants.add(e.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
+  }
+  for (const v of [...variants].sort((a, b) => b.length - a.length)) out = out.split(v).join(PASSWORD_REDACTED);
+  return out;
+};
+const prng = (seed) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+const encodeForm = (rnd, val) => {
+  let out = "";
+  for (const ch of val) {
+    const bs = Buffer.from(ch, "utf8");
+    if (rnd() < 0.5) out += ch;
+    else for (const b of bs) out += "%" + (rnd() < 0.5 ? b.toString(16).toUpperCase() : b.toString(16)).padStart(2, "0");
+  }
+  return out;
+};
+const junk = ["", "a", "b", "%", "%4", "%zz", "%4g", "%41", "%c3", "%C3%A9", "é", "日", "\u{1f600}", "\ud83d", "\ude00", "\ud83d%", " ", "+", "x", "1", "%e6%97", "%F0%9F", "%f0%9f%98", "%2", "ab", "cd"];
+const randomInput = (rnd, pool) => {
+  let out = "";
+  const parts = 1 + Math.floor(rnd() * 14);
+  for (let i = 0; i < parts; i++) {
+    const r = rnd();
+    if (r < 0.45) out += encodeForm(rnd, pool[Math.floor(rnd() * pool.length)]);
+    else if (r < 0.55) { // truncated value (partial and overlapping matches)
+      const cs = [...pool[Math.floor(rnd() * pool.length)]];
+      out += encodeForm(rnd, cs.slice(0, Math.floor(rnd() * cs.length)).join(""));
+    } else out += junk[Math.floor(rnd() * junk.length)];
+  }
+  return !out.includes("%") ? out + "%41" : out;
+};
+const SMALL = ["abcd", "bcde", "abcdabcd", "aaaa", "ab1é", "日本語x", "x\u{1f600}yz"];
+
+test("redactor matcher: arrayBuffers memory does not scale with input length", () => {
+  const r = makeRedactor("s3cr3t-value");
+  r.redact("warm%41up"); // tiny warm-up: nothing input-sized allocated yet
+  if (global.gc) global.gc();
+  const before = process.memoryUsage().arrayBuffers;
+  const big = "ab%zz cd%41 日本 ".repeat(Math.ceil(2_000_000 / 15)).slice(0, 2_000_000);
+  assert.equal(big.length, 2_000_000);
+  assert.equal(r.redact(big), big);
+  if (global.gc) global.gc();
+  const grown = process.memoryUsage().arrayBuffers - before;
+  assert.ok(grown < 1_000_000, `arrayBuffers grew by ${grown} bytes`);
+});
+
+test("redactor matcher: matches the whole-input reference on seeded random inputs (Aho-Corasick path)", () => {
+  const rnd = prng(12345);
+  let checked = 0, withMatch = 0;
+  for (let r = 0; r < 8; r++) {
+    const vals = [];
+    const k = 1 + Math.floor(rnd() * 3);
+    for (let i = 0; i < k; i++) vals.push(SMALL[Math.floor(rnd() * SMALL.length)]);
+    const uniq = [...new Set(vals)];
+    const red = makeRedactor(uniq);
+    for (let i = 0; i < 500; i++) {
+      const s = randomInput(rnd, uniq);
+      const want = oracleRedact(s, uniq);
+      assert.equal(red.redact(s), want, `values ${JSON.stringify(uniq)} input ${JSON.stringify(s)}`);
+      checked++;
+      if (want !== s) withMatch++;
+    }
+  }
+  assert.ok(checked >= 4000 && withMatch > 1000, `checked ${checked}, with matches ${withMatch}`);
+});
+
+test("redactor matcher: matches straddling the ring boundary at every offset", () => {
+  const uniq = ["abcdabcd", "日本語x"];
+  const red = makeRedactor(uniq);
+  const rnd = prng(7);
+  for (let pad = 0; pad < 70; pad++) {
+    for (const v of uniq) {
+      const s = "q".repeat(pad) + "%" + encodeForm(rnd, v) + "%41" + "q".repeat(pad % 5);
+      assert.equal(red.redact(s), oracleRedact(s, uniq), JSON.stringify(s));
+    }
+  }
+});
+
+test("redactor matcher: matches the whole-input reference on the KMP fallback path (> 16384 pattern bytes)", () => {
+  const rnd = prng(99);
+  const letters = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const fillers = Array.from({ length: 5 }, () => Array.from({ length: 4000 }, () => letters[Math.floor(rnd() * letters.length)]).join(""));
+  const uniq = [...SMALL, ...fillers];
+  const red = makeRedactor(uniq);
+  let withMatch = 0;
+  for (let i = 0; i < 600; i++) {
+    const pool = rnd() < 0.05 ? uniq : SMALL;
+    const s = randomInput(rnd, pool);
+    const want = oracleRedact(s, uniq);
+    assert.equal(red.redact(s), want, `input ${JSON.stringify(s)}`);
+    if (want !== s) withMatch++;
+  }
+  assert.ok(withMatch > 100, `with matches ${withMatch}`);
+  // Matches straddling the 4096-slot ring boundary, and a 4000-byte pattern filling most of the ring.
+  for (let pad = 4070; pad < 4110; pad++) {
+    for (const v of [SMALL[0], SMALL[5], fillers[2]]) {
+      const s = "%41" + "q".repeat(pad) + encodeForm(rnd, v) + "%41";
+      assert.equal(red.redact(s), oracleRedact(s, uniq), `pad ${pad}`);
+    }
+  }
+});
