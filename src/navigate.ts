@@ -42,6 +42,24 @@ const STATE_EXCERPT_CHARS = 1_500;
 // Capture windows are these plus the longest secret representation.
 const CREDENTIAL_VISIBLE = { label: 80, option: 120, href: 120 };
 
+/**
+ * Normalised "host:port" key for matching a proxy block record (host:port) to a navigation request URL.
+ * Exported for tests.
+ */
+export function blockTargetKey(raw: string): string {
+  try {
+    if (raw.includes("://")) {
+      const u = new URL(raw);
+      const port = u.port || (u.protocol === "https:" ? "443" : u.protocol === "http:" ? "80" : "");
+      return `${u.hostname.replace(/^\[|\]$/g, "").toLowerCase()}:${port}`;
+    }
+  } catch {
+    return raw.toLowerCase();
+  }
+  const m = /^(.*):(\d+)$/.exec(raw);
+  return m ? `${m[1].replace(/^\[|\]$/g, "").toLowerCase()}:${m[2]}` : raw.toLowerCase();
+}
+
 export interface NavigateOptions {
   task: string;
   /** Start URL for an internally-created page. Omit when `page` is supplied. */
@@ -73,6 +91,8 @@ export interface NavigateOptions {
   cookies?: SeedCookie[];
   /** Test seam: DNS resolver for the start-URL preflight (default: system DNS). */
   resolver?: Resolver;
+  /** Test seam: cap (ms) for the initial goto(); still bounded by the remaining run budget. Default 30000. */
+  gotoTimeoutMs?: number;
 }
 
 export interface StepRecord {
@@ -626,7 +646,9 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   // One abort source per run: the wall-clock deadline, optionally composed
   // with caller cancellation (the MCP layer forwards its signal).
   const controller = new AbortController();
-  const deadlineTimer = setTimeout(() => controller.abort(new Error("deadline-exceeded")), maxSeconds * 1000);
+  // Identity of the deadline's abort reason: status "timeout" is decided by this, never by searching error text.
+  const deadlineReason = new Error("deadline-exceeded");
+  const deadlineTimer = setTimeout(() => controller.abort(deadlineReason), maxSeconds * 1000);
   const onExternalAbort = () => controller.abort(new Error("cancelled-by-caller"));
   externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
   if (externalSignal?.aborted) controller.abort(new Error("cancelled-by-caller"));
@@ -700,7 +722,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
   let browser: Browser | null = null;
   let ownsBrowser = false;
   let observedContext: BrowserContext | null = null;
-  const blockedRequests: string[] = [];
+  // Block message recorded when the MAIN navigation itself was blocked (route handler, or a proxy-level
+  // block matched to a failed main-frame navigation request). Subresource blocks never set this.
+  let mainNavBlocked: string | null = null;
+  let mainPage: Page | null = options.page ?? null;
+  const proxyBlocked: Array<{ message: string; target: string }> = [];
+  const failedMainTargets = new Set<string>();
   let guardProxy: GuardProxy | null = null;
   let unrouteGuards: (() => void) | null = null;
   let onNewPage: ((page: Page) => void) | null = null;
@@ -746,7 +773,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     // cancel), and cancellation is rechecked before the proxy or Chromium start.
     if (startUrl) await assertUrlAllowed(startUrl, { signal: controller.signal, resolver: options.resolver });
     controller.signal.throwIfAborted();
-    if (!options.page) guardProxy = await startGuardProxy({ onBlocked: (m) => blockedRequests.push(m) });
+    if (!options.page) guardProxy = await startGuardProxy({ onBlocked: (m, target) => proxyBlocked.push({ message: m, target: target ?? "" }) });
     controller.signal.throwIfAborted();
     browser = options.page
       ? null
@@ -774,7 +801,12 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
         await assertUrlAllowed(route.request().url());
       } catch (e) {
         if (e instanceof BlockedAddressError) {
-          blockedRequests.push(e.message);
+          try {
+            const req = route.request();
+            if (mainPage && req.isNavigationRequest() && req.frame() === mainPage.mainFrame()) mainNavBlocked ??= e.message;
+          } catch {
+            // frame() can throw for requests without a frame (e.g. service workers): not a main-frame navigation
+          }
           await route.abort("blockedbyclient").catch(() => {});
           return;
         }
@@ -807,7 +839,6 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           await assertUrlAllowed(ws.url());
         } catch (e) {
           if (e instanceof BlockedAddressError) {
-            blockedRequests.push(e.message);
             await ws.close({ code: 1008, reason: "blocked" });
             return;
           }
@@ -825,6 +856,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
       context.setDefaultTimeout(8_000);
     }
     let page = options.page ?? (await context.newPage());
+    mainPage = page;
     const videoPathPromise = options.recordDir ? page.video()?.path() : undefined;
     attachPageObservers(page);
     // Cloudflare's official bot-protection signal: the cf-mitigated response
@@ -840,6 +872,15 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     };
     page.on("response", onResponse);
     observerCleanups.push(() => runPage.off("response", onResponse));
+    const onMainRequestFailed = (r: Request) => {
+      try {
+        if (r.isNavigationRequest() && r.frame() === runPage.mainFrame()) failedMainTargets.add(blockTargetKey(r.url()));
+      } catch {
+        // detached frame: not attributable
+      }
+    };
+    page.on("requestfailed", onMainRequestFailed);
+    observerCleanups.push(() => runPage.off("requestfailed", onMainRequestFailed));
     let pendingPage: Page | null = null;
     onNewPage = (p) => {
       attachPageObservers(p); // adopted tabs keep producing diagnostics
@@ -849,7 +890,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
 
     if (startUrl) {
       try {
-        const nav = page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(30_000) });
+        const nav = page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: bounded(options.gotoTimeoutMs ?? 30_000) });
         nav.catch(() => {});
         // A caller cancel must not wait out a stalled navigation (the proxy hop
         // adds a connection the browser no longer tears down by itself).
@@ -871,10 +912,15 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
           }),
         ]);
       } catch (e) {
-        // Substitute the block message only when the main navigation itself failed. A deadline /
-        // caller-cancel rejection is the run signal's own reason (identity, not message text) and
-        // must survive an unrelated blocked subresource recorded while goto() was waiting.
-        if (blockedRequests.length && !(controller.signal.aborted && e === controller.signal.reason)) throw new Error(blockedRequests[0]);
+        // Substitute the block message only when the main navigation itself was blocked (fail closed: the
+        // message names the block even when a deadline / cancel won the race; status is decided separately
+        // from the abort reason). An unrelated blocked subresource never replaces the real error.
+        await new Promise<void>((r) => setImmediate(r)); // let a pending requestfailed event land
+        if (!mainNavBlocked) {
+          const hit = proxyBlocked.find((b) => b.target && failedMainTargets.has(blockTargetKey(b.target)));
+          if (hit) mainNavBlocked = hit.message;
+        }
+        if (mainNavBlocked) throw new Error(mainNavBlocked);
         throw e;
       }
     }
@@ -1356,7 +1402,7 @@ export async function navigate(options: NavigateOptions, externalSignal?: AbortS
     return redactor ? redactor.redactDeep(result) : result;
   } catch (runError) {
     const aborted = controller.signal.aborted;
-    status = aborted && String((runError as Error).message).includes("deadline") ? "timeout" : "error";
+    status = aborted && controller.signal.reason === deadlineReason ? "timeout" : "error";
     const failure = {
       status,
       error: R(aborted ? `aborted: ${(runError as Error).message}` : (runError as Error).message),

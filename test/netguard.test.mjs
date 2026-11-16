@@ -5,7 +5,8 @@ import { createSocket } from "node:dgram";
 import { networkInterfaces } from "node:os";
 import { test } from "node:test";
 import { assertUrlAllowed, classifyHost, parseAllowList, startGuardProxy } from "../dist/netguard.js";
-import { navigate } from "../dist/navigate.js";
+import { chromium } from "playwright";
+import { blockTargetKey, navigate } from "../dist/navigate.js";
 
 // `npm run test:unit` sets JEV_TEST_UNIT=1 to skip tests that launch Chromium
 // (or need the network); `npm test` runs everything.
@@ -237,6 +238,134 @@ browserTest("navigate: a genuinely blocked main navigation (redirect to a privat
   } finally {
     if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
     front.close(); secret.close();
+  }
+});
+
+// REGRESSION: a blocked private SUBRESOURCE must not turn an unrelated main-navigation failure (here a stalled
+// document hitting the goto timeout) into a "blocked ... ALLOW_PRIVATE_HOSTS" message. Fast via the goto timeout seam.
+browserTest("navigate: stalled main document + blocked subresource at the goto timeout reports the real timeout error, not a block", async () => {
+  const secretHits = [];
+  const secret = createServer((req, res) => { secretHits.push(req.url); res.end("secret"); });
+  await new Promise((r) => secret.listen(0, "127.0.0.1", r));
+  const sf = await stalledFront(secret.address().port);
+  const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
+  process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${sf.port}`;
+  try {
+    const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${sf.port}/`, maxSeconds: 60, gotoTimeoutMs: 2500, screenshot: "none", transport: judge });
+    assert.ok(await Promise.race([sf.beacon.then(() => true), new Promise((res) => setTimeout(() => res(false), 0))]), "the private subresource was blocked before the goto timeout");
+    assert.deepEqual(secretHits, []);
+    assert.equal(r.status, "error");
+    assert.match(r.error ?? "", /Timeout/);
+    assert.doesNotMatch(r.error ?? "", /blocked|ALLOW_PRIVATE_HOSTS/);
+  } finally {
+    if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
+    sf.close(); secret.close();
+  }
+});
+
+// Injected-page helper: runs fn(page) with a real page on a borrowed context (no proxy, route guard only).
+async function withInjectedPage(fn) {
+  const browser = await chromium.launch({ headless: true });
+  const savedUnproxied = process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE;
+  process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = "1";
+  try {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await fn(page);
+  } finally {
+    if (savedUnproxied === undefined) delete process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE; else process.env.JEV_BROWSER_ALLOW_UNPROXIED_PAGE = savedUnproxied;
+    await browser.close().catch(() => {});
+  }
+}
+
+// REGRESSION: a main navigation that WAS blocked keeps its block message even when the caller cancel wins the race.
+// Deterministic setup (route layer, injected page): the start URL passes the preflight, then the allow list is
+// withdrawn when the main-document request starts, so the route handler blocks the MAIN navigation itself; the cancel
+// fires from that request's failure event, after the route handler recorded the block.
+browserTest("navigate: blocked main navigation keeps the block message when a caller cancel wins the race; never done", async () => {
+  const hits = [];
+  const front = createServer((req, res) => { hits.push(req.url); res.end("secret"); });
+  await new Promise((r) => front.listen(0, "127.0.0.1", r));
+  const fp = front.address().port;
+  const saved = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
+  process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${fp}`;
+  try {
+    await withInjectedPage(async (page) => {
+      const ctl = new AbortController();
+      page.on("request", () => { delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; });
+      page.on("requestfailed", () => ctl.abort());
+      const r = await navigate({ task: "x", startUrl: `http://127.0.0.1:${fp}/`, page, maxSeconds: 60, screenshot: "none", transport: judge }, ctl.signal);
+      assert.notEqual(r.status, "done");
+      assert.equal(r.status, "error"); // a caller cancel is never a deadline timeout
+      assert.match(r.error ?? "", /blocked .*loopback/);
+      assert.deepEqual(hits, [], "the blocked main document must never be fetched");
+    });
+  } finally {
+    if (saved === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = saved;
+    front.close();
+  }
+});
+
+// Status comes from the abort reason, not from searching thrown text for "deadline". The click targets a button
+// covered by an overlay, so Playwright retries until its own timeout and throws its raw error text (the action
+// catch rethrows it once the run is aborted). The overlay's class is part of that text.
+const clickJudge = (onAsk) => ({
+  name: "fixture",
+  async ask({ questions }) {
+    onAsk?.();
+    const answers = {};
+    for (const [id, q] of Object.entries(questions)) {
+      const keys = q.type === "noul" ? [] : Object.keys(q.criteria);
+      const pick = keys.find((k) => k.startsWith("click_")) ?? keys[0];
+      answers[id] = q.type === "noul" ? { type: "noul", noul: 0 } : { type: "choice", choice: pick, confidence: 1, probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? 1 : 0])) };
+    }
+    return { answers, usage: { input_tokens: 1, output_tokens: 1 }, model: "fixture" };
+  },
+});
+const coveredButton = (page, cls) => page.setContent(`<button id="b">Go</button><div class="${cls}" style="position:fixed;inset:0;z-index:9"></div>`);
+
+browserTest("navigate: an in-flight action's Playwright timeout at the deadline ends as timeout", async () => {
+  await withInjectedPage(async (page) => {
+    await coveredButton(page, "overlay");
+    const r = await navigate({ task: "click", page, maxSeconds: 3, screenshot: "none", transport: clickJudge() });
+    assert.equal(r.status, "timeout", `${r.status}: ${r.error}`);
+    assert.match(r.error ?? "", /Timeout/);
+  });
+});
+
+browserTest("navigate: thrown text containing \"deadline\" during a caller cancel (no deadline abort) is not classified as timeout", async () => {
+  await withInjectedPage(async (page) => {
+    await coveredButton(page, "deadline");
+    const ctl = new AbortController();
+    const r = await navigate({ task: "click", page, maxSeconds: 60, screenshot: "none", transport: clickJudge(() => setTimeout(() => ctl.abort(), 300)) }, ctl.signal);
+    assert.match(r.error ?? "", /deadline/, "precondition: the thrown Playwright text names the overlay class");
+    assert.equal(r.status, "error", `${r.status}: ${r.error}`);
+  });
+});
+
+test("blockTargetKey normalises proxy block targets and navigation URLs to the same host:port key", () => {
+  assert.equal(blockTargetKey("Rebind.Test:443"), "rebind.test:443");
+  assert.equal(blockTargetKey("https://rebind.test/x?y"), "rebind.test:443");
+  assert.equal(blockTargetKey("http://rebind.test/x"), "rebind.test:80");
+  assert.equal(blockTargetKey("http://rebind.test:8080/"), "rebind.test:8080");
+  assert.equal(blockTargetKey("[::1]:9"), "::1:9");
+  assert.equal(blockTargetKey("http://[::1]:9/"), "::1:9");
+  assert.notEqual(blockTargetKey("http://a.test/"), blockTargetKey("http://b.test/"));
+});
+
+test("proxy: onBlocked receives the blocked host:port target for main-document attribution", async () => {
+  const seen = [];
+  const proxy = await startGuardProxy({ allow: none, resolver: async () => ["127.0.0.1"], onBlocked: (m, t) => seen.push([m, t]) });
+  try {
+    const c = netConnect(proxy.port, "127.0.0.1");
+    c.on("data", () => {}); c.on("error", () => {});
+    await new Promise((r) => c.once("connect", r));
+    c.write("CONNECT rebind.test:443 HTTP/1.1\r\nHost: rebind.test:443\r\n\r\n");
+    await new Promise((r) => c.once("close", r));
+    assert.equal(seen.length, 1);
+    assert.equal(blockTargetKey(seen[0][1]), blockTargetKey("https://rebind.test/"));
+  } finally {
+    await proxy.close();
   }
 });
 

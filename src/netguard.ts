@@ -288,7 +288,7 @@ export interface GuardProxy {
 export async function startGuardProxy(opts: {
   allow?: AllowList;
   resolver?: Resolver;
-  onBlocked?: (message: string) => void;
+  onBlocked?: (message: string, target?: string) => void;
   /** Per-address CONNECT dial timeout (default 5000ms). */
   connectTimeoutMs?: number;
   /** Test seam: dial an already-validated address (default net.connect). */
@@ -298,7 +298,7 @@ export async function startGuardProxy(opts: {
   const resolver = opts.resolver ?? defaultResolver;
   const sockets = new Set<net.Socket>();
   const blockedOut = (e: unknown, sock: net.Socket | null, res?: http.ServerResponse) => {
-    if (e instanceof BlockedAddressError) opts.onBlocked?.(e.message);
+    if (e instanceof BlockedAddressError) opts.onBlocked?.(e.message, e.url);
     // Reset the connection so the browser reports a failed request (a 403 page would look like a normal load).
     void res;
     sock?.destroy();
@@ -477,7 +477,7 @@ export async function startGuardProxy(opts: {
       }
       client.destroy();
     } catch (e) {
-      if (e instanceof BlockedAddressError) opts.onBlocked?.(e.message);
+      if (e instanceof BlockedAddressError) opts.onBlocked?.(e.message, e.url);
       if (!client.destroyed) client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     }
   });
