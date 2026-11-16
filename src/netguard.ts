@@ -256,6 +256,11 @@ export async function assertUrlAllowed(
 import http from "node:http";
 import net from "node:net";
 
+// Node's default header limit is 16 KiB, which answers 431 to a plain-HTTP request with a few large
+// cookies before the guard handler runs (and rejects large upstream Set-Cookie responses). 256 KiB
+// is Chrome's own header limit, so the proxy accepts anything the browser would send or accept.
+const MAX_HEADER_SIZE = 256 * 1024;
+
 // Returns every validated address (in resolver order) so callers can fall back across them
 // without a fresh, unchecked lookup.
 async function resolveValidated(host: string, port: string, allow: AllowList, resolver: Resolver): Promise<string[]> {
@@ -322,7 +327,7 @@ export async function startGuardProxy(opts: {
   };
   const upstreams = new Set<http.ClientRequest>();
   let closing = false;
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer({ maxHeaderSize: MAX_HEADER_SIZE }, async (req, res) => {
     // Attach teardown before awaiting DNS: a client that goes away (or a proxy close) during
     // resolution must never result in an upstream connection being created.
     let gone = false;
@@ -354,7 +359,7 @@ export async function startGuardProxy(opts: {
       delete headers["proxy-connection"];
       const request = http.request(
         // agent:false: no connection pooling, so every upstream socket belongs to exactly one tracked request.
-        { host: ip, port: Number(port), method: req.method, path: u.pathname + u.search, headers: { ...headers, host: u.host }, agent: false },
+        { host: ip, port: Number(port), method: req.method, path: u.pathname + u.search, headers: { ...headers, host: u.host }, agent: false, maxHeaderSize: MAX_HEADER_SIZE },
         (r) => {
           gotResponse = true;
           try {

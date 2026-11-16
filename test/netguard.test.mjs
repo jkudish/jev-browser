@@ -941,3 +941,66 @@ for (const [label, reply] of [
     }
   });
 }
+
+test("proxy plain HTTP: a ~20 KiB Cookie request header is forwarded in full (no 431)", async () => {
+  let got = null;
+  const origin = createServer({ maxHeaderSize: 256 * 1024 }, (req, res) => {
+    got = req.headers.cookie;
+    res.end("ok");
+  });
+  await new Promise((r) => origin.listen(0, "127.0.0.1", r));
+  const port = origin.address().port;
+  const proxy = await startGuardProxy({ allow: parseAllowList("bigcookie.test"), resolver: async () => ["127.0.0.1"] });
+  try {
+    const cookie = Array.from({ length: 5 }, (_, i) => `c${i}=${"x".repeat(4000)}`).join("; ");
+    const body = await new Promise((resolve, reject) => {
+      const req = httpRequest(
+        { host: "127.0.0.1", port: proxy.port, method: "GET", path: `http://bigcookie.test:${port}/`, headers: { host: `bigcookie.test:${port}`, cookie }, agent: false },
+        (res) => {
+          let b = "";
+          res.on("data", (d) => (b += d));
+          res.on("end", () => resolve({ status: res.statusCode, b }));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(body.status, 200);
+    assert.equal(body.b, "ok");
+    assert.equal(got, cookie);
+  } finally {
+    await proxy.close();
+    origin.close();
+  }
+});
+
+test("proxy plain HTTP: an upstream response with ~20 KiB of headers is relayed", async () => {
+  const setCookies = Array.from({ length: 5 }, (_, i) => `s${i}=${"y".repeat(4000)}`);
+  const origin = createServer((req, res) => {
+    res.writeHead(200, { "set-cookie": setCookies });
+    res.end("ok");
+  });
+  await new Promise((r) => origin.listen(0, "127.0.0.1", r));
+  const port = origin.address().port;
+  const proxy = await startGuardProxy({ allow: parseAllowList("bigresp.test"), resolver: async () => ["127.0.0.1"] });
+  try {
+    const out = await new Promise((resolve, reject) => {
+      const req = httpRequest(
+        { host: "127.0.0.1", port: proxy.port, method: "GET", path: `http://bigresp.test:${port}/`, headers: { host: `bigresp.test:${port}` }, agent: false, maxHeaderSize: 256 * 1024 },
+        (res) => {
+          let b = "";
+          res.on("data", (d) => (b += d));
+          res.on("end", () => resolve({ status: res.statusCode, cookies: res.headers["set-cookie"], b }));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(out.status, 200);
+    assert.equal(out.b, "ok");
+    assert.deepEqual(out.cookies, setCookies);
+  } finally {
+    await proxy.close();
+    origin.close();
+  }
+});
