@@ -1832,3 +1832,95 @@ test("navigate: a secret used as the start-URL host is redacted in its lowercase
   const blob = JSON.stringify(r);
   assert.ok(!blob.includes(pw) && !blob.includes(pw.toLowerCase()), blob);
 });
+
+// Encoding-independent matching: any mix of literal and %XX-escaped characters that decodes to the secret.
+test("redactor matches the secret however the browser escaped it (userinfo, re-encoded query, host)", () => {
+  const cases = [
+    ["it's;a secret", "http://u:it%27s%3Ba%20secret@127.0.0.1:9/"], // (a) Chromium userinfo encoding
+    ["it's a $ecret", "http://127.0.0.1:9/?t=it%27s%20a%20%24ecret"], // (b) encodeURIComponent then re-encoded
+    ["~tilde*star()", "http://h.test/?t=%7Etilde%2Astar%28%29"], // (c) host/escape forms
+    ["~tilde*star()", "net::ERR for ~tilde%2Astar()"],
+  ];
+  for (const [secret, text] of cases) {
+    const { redact, redactCapped } = makeRedactor(secret);
+    const out = redact(text);
+    assert.ok(out.includes(PASSWORD_REDACTED), out);
+    assert.ok(!/%27s|%3Ba|%24ecret|%7Etilde|%2Astar|tilde%2A/i.test(out), `leaked: ${out}`);
+    const capped = redactCapped(text, 200);
+    assert.ok(capped.includes(PASSWORD_REDACTED) && !/%27s|%3Ba|%24ecret|%7Etilde|%2Astar|tilde%2A/i.test(capped), capped);
+  }
+});
+
+test("redactor treats mixed literal/escaped characters and mixed hex case as one span", () => {
+  const secret = "Café €-Pass!7";
+  const { redact } = makeRedactor(secret);
+  const forms = [
+    "Caf%C3%A9%20%E2%82%AC-Pass%217",
+    "Caf%c3%a9%20%e2%82%ac-Pass%217",
+    "Café%20€-Pass!7",
+    "Caf%C3%a9 %E2%82%ac-Pa%73s%217", // mixed case, mixed literal/escaped
+    "Café %e2%82%AC-%50ass!7",
+  ];
+  for (const f of forms) {
+    assert.equal(redact(`x=${f}&y=1`), `x=${PASSWORD_REDACTED}&y=1`, f);
+  }
+  assert.equal(redact("x=Caf%C3%A8%20 other"), "x=Caf%C3%A8%20 other"); // a different character is not the secret
+});
+
+test("redactor never throws on lone surrogates or malformed escapes and stays linear on adversarial text", () => {
+  const lone = makeRedactor(["ab-secret-cd", "plain-Secret-1"]);
+  assert.equal(lone.redact("x ab%2Dsecret-\ud800cd %2D\udc00 ab-secret-cd y"), `x ab%2Dsecret-\ud800cd %2D\udc00 ${PASSWORD_REDACTED} y`);
+  assert.doesNotThrow(() => lone.redact("%zz%4%% \udc00 plain%2DSecret%2d1 %"));
+  assert.ok(!lone.redact("plain%2DSecret%2d1").includes("%2D"));
+  const { redact } = makeRedactor("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab");
+  const t0 = Date.now();
+  redact("%61".repeat(200000) + "a".repeat(200000));
+  assert.ok(Date.now() - t0 < 3000, "adversarial repeat must not blow up");
+});
+
+test("redactor does not over-redact: host forms need the whole secret to be the host, and never an IP literal", () => {
+  const email = makeRedactor("abc@google.com");
+  assert.equal(email.redact("visit google.com now"), "visit google.com now");
+  const num = makeRedactor("2130706433");
+  assert.equal(num.redact("connect to 127.0.0.1:80"), "connect to 127.0.0.1:80");
+  assert.ok(!num.redact("id 2130706433").includes("2130706433"));
+  const path = makeRedactor("a/b.example.com");
+  assert.equal(path.redact("see b.example.com"), "see b.example.com");
+  const real = makeRedactor("Pre-Redactor-Secret-123");
+  assert.ok(!real.redact("dns pre-redactor-secret-123.invalid").includes("pre-redactor-secret-123"));
+  // minimum-length guard still applies to the byte matcher
+  const short = makeRedactor("Ab%");
+  assert.equal(short.redact("%41b% A%62"), "%41b% A%62");
+});
+
+browserTest("navigate: a password in the start-URL userinfo is redacted from final_url after Chromium re-encodes it", async () => {
+  const http = await import("node:http");
+  const srv = http.createServer((_q, r) => { r.setHeader("content-type", "text/html"); r.end("<title>t</title>hello"); });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  const port = srv.address().port;
+  const prev = process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS;
+  process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = `127.0.0.1:${port}`;
+  try {
+    const pw = "it's;a secret";
+    const r = await navigate({
+      task: "x", startUrl: `http://u:${pw}@127.0.0.1:${port}/`, maxSeconds: 20, maxSteps: 1, screenshot: "none",
+      password: { value: pw, origin: "https://example.com" },
+      resolver: async () => { throw new Error("no llm"); },
+    });
+    const blob = JSON.stringify(r);
+    assert.ok(!/it%27s|%3Ba%20secret|it's;a/i.test(blob), blob);
+  } finally {
+    if (prev === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS; else process.env.JEV_BROWSER_ALLOW_PRIVATE_HOSTS = prev;
+    srv.close();
+  }
+});
+
+test("redactor byte matcher agrees with and without the single-automaton fast path", () => {
+  // 40 secrets of ~1 KB exceed the automaton table budget and use per-pattern matching.
+  const big = Array.from({ length: 40 }, (_, i) => `Big-${i}-` + "q!".repeat(500));
+  const r = makeRedactor(big);
+  const esc = big[7].replace(/[!-]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  assert.equal(r.redact(`a=${esc}&b`), `a=${PASSWORD_REDACTED}&b`);
+  const small = makeRedactor(["alpha-secret-1", "beta-secret-22"]);
+  assert.equal(small.redact("%61lpha%2Dsecret-1 beta%2dsecret%2D22"), `${PASSWORD_REDACTED} ${PASSWORD_REDACTED}`);
+});

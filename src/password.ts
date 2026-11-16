@@ -320,7 +320,13 @@ export function urlComponentForms(secret: string): string[] {
     () => { between(new URL("https://" + L + secret + R + "@example.com/").username); },
     () => {
       // Host: the secret is the whole label sequence (IDNA mapping, lowercasing, punycode).
+      // Only when the whole secret parsed as the entire host: a secret like `abc@google.com` or
+      // `a/b.example` has a host that is not the secret, and an IPv4/IPv6 literal (`2130706433` ->
+      // `127.0.0.1`) is a common string that must not be redacted everywhere.
+      if (/[@/\\?#:[\]]/.test(secret)) return;
       const h = new URL("http://" + secret + "/");
+      if (h.username || h.password || h.port || h.search || h.hash || h.pathname !== "/") return;
+      if (h.hostname.startsWith("[") || /^[0-9.]+$/.test(h.hostname)) return;
       out.add(h.hostname);
       out.add(domainToUnicode(h.hostname));
     },
@@ -432,7 +438,185 @@ export function makeRedactor(secrets: string | string[]): Redactor {
     throw new Error("unreachable: no character is absent from a finite set");
   };
   const blocker = pickAbsent();
-  const survivors = (s: string): boolean => ordered.some((v) => s.includes(v));
+  // Encoding-independent matching. Each secret is matched as UTF-8 bytes against the text decoded
+  // into bytes: a literal character contributes its UTF-8 bytes, a well-formed %XX escape (either hex
+  // case) contributes one byte. So any mix of literal and percent-escaped characters that decodes to
+  // the secret is one span, whatever the browser chose to escape. The decoded stream is built in one
+  // pass with the text offset of each byte, then every pattern is matched with KMP: linear time, no
+  // regex built from the secret, nothing that can backtrack. Secrets with lone surrogates are not
+  // byte-representable and keep only the variant matching.
+  const wellFormed = (s: string): boolean => {
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        const d = s.charCodeAt(i + 1);
+        if (!(d >= 0xdc00 && d <= 0xdfff)) return false;
+        i++;
+      } else if (c >= 0xdc00 && c <= 0xdfff) return false;
+    }
+    return true;
+  };
+  const patternSeen = new Set<string>();
+  const patterns: Uint8Array[] = [];
+  for (const secret of secretList) {
+    for (const form of [secret, normalizeEcho(secret)]) {
+      if ([...form].length < MIN_SECRET_CHARS || !wellFormed(form) || patternSeen.has(form)) continue;
+      patternSeen.add(form);
+      patterns.push(Uint8Array.from(Buffer.from(form, "utf8")));
+    }
+  }
+  const patternFailures = patterns.map((v) => {
+    const f = new Int32Array(v.length);
+    let k = 0;
+    for (let i = 1; i < v.length; i++) {
+      while (k > 0 && v[i] !== v[k]) k = f[k - 1];
+      if (v[i] === v[k]) k++;
+      f[i] = k;
+    }
+    return f;
+  });
+  // All patterns in one Aho-Corasick automaton (dense byte transitions, one table lookup per stream
+  // byte) so the cost does not scale with the number of secrets. Built only while the table stays
+  // small (<= 16 MB); beyond that the patterns are matched one KMP pass each.
+  let acNext: Int32Array | null = null;
+  let acLen: Int32Array = new Int32Array(0); // longest pattern ending at each state
+  {
+    let total = 1;
+    for (const v of patterns) total += v.length;
+    if (patterns.length > 0 && total * 256 <= 4_194_304) {
+      const next = new Int32Array(total * 256).fill(-1);
+      const len = new Int32Array(total);
+      let states = 1;
+      for (const v of patterns) {
+        let st = 0;
+        for (const b of v) {
+          if (next[st * 256 + b] < 0) next[st * 256 + b] = states++;
+          st = next[st * 256 + b];
+        }
+        len[st] = Math.max(len[st], v.length);
+      }
+      const fail = new Int32Array(states);
+      const queue: number[] = [];
+      for (let c = 0; c < 256; c++) {
+        const s1 = next[c];
+        if (s1 < 0) next[c] = 0;
+        else queue.push(s1);
+      }
+      for (let qi = 0; qi < queue.length; qi++) {
+        const st = queue[qi];
+        len[st] = Math.max(len[st], len[fail[st]]);
+        for (let c = 0; c < 256; c++) {
+          const s1 = next[st * 256 + c];
+          if (s1 < 0) next[st * 256 + c] = next[fail[st] * 256 + c];
+          else {
+            fail[s1] = next[fail[st] * 256 + c];
+            queue.push(s1);
+          }
+        }
+      }
+      acNext = next;
+      acLen = len;
+    }
+  }
+  const hexVal = (c: number): number =>
+    c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1;
+  let scratchBytes = new Uint16Array(0);
+  let scratchStarts = new Int32Array(0);
+  // Returns merged [start, end) spans of s whose percent-decoding contains a secret.
+  const matchSpans = (s: string): Array<[number, number]> => {
+    if (patterns.length === 0 || s.indexOf("%") < 0) return [];
+    const len = s.length;
+    if (scratchBytes.length < len * 3) {
+      scratchBytes = new Uint16Array(len * 3);
+      scratchStarts = new Int32Array(len * 3);
+    }
+    const bytes = scratchBytes, starts = scratchStarts;
+    let n = 0;
+    for (let i = 0; i < len; ) {
+      const c = s.charCodeAt(i);
+      if (c === 37 && i + 2 < len && hexVal(s.charCodeAt(i + 1)) >= 0 && hexVal(s.charCodeAt(i + 2)) >= 0) {
+        starts[n] = i;
+        bytes[n++] = hexVal(s.charCodeAt(i + 1)) * 16 + hexVal(s.charCodeAt(i + 2));
+        i += 3;
+      } else if (c < 0x80) {
+        starts[n] = i;
+        bytes[n++] = c;
+        i++;
+      } else if (c < 0x800) {
+        starts[n] = i; bytes[n++] = 0xc0 | (c >> 6);
+        starts[n] = i; bytes[n++] = 0x80 | (c & 63);
+        i++;
+      } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < len && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
+        const cp = 0x10000 + ((c - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
+        starts[n] = i; bytes[n++] = 0xf0 | (cp >> 18);
+        starts[n] = i; bytes[n++] = 0x80 | ((cp >> 12) & 63);
+        starts[n] = i; bytes[n++] = 0x80 | ((cp >> 6) & 63);
+        starts[n] = i; bytes[n++] = 0x80 | (cp & 63);
+        i += 2;
+      } else if (c >= 0xd800 && c <= 0xdfff) {
+        starts[n] = i; bytes[n++] = 0x100; // lone surrogate: matches nothing
+        i++;
+      } else {
+        starts[n] = i; bytes[n++] = 0xe0 | (c >> 12);
+        starts[n] = i; bytes[n++] = 0x80 | ((c >> 6) & 63);
+        starts[n] = i; bytes[n++] = 0x80 | (c & 63);
+        i++;
+      }
+    }
+    const raw: Array<[number, number]> = [];
+    // A match must begin and end on a text-unit boundary (always true for valid UTF-8 patterns;
+    // the check keeps a malformed stream from yielding a half-character span).
+    const hit = (i: number, m: number): void => {
+      const a = i - m + 1;
+      if ((a === 0 || starts[a - 1] !== starts[a]) && (i + 1 >= n || starts[i + 1] !== starts[i])) {
+        raw.push([starts[a], i + 1 < n ? starts[i + 1] : len]);
+      }
+    };
+    if (acNext) {
+      // Only the longest pattern ending at a state is reported: any shorter one ending there is a
+      // suffix of it, so its span is contained in the longer span.
+      let st = 0;
+      for (let i = 0; i < n; i++) {
+        const b = bytes[i];
+        st = b > 255 ? 0 : acNext[st * 256 + b];
+        if (acLen[st] > 0) hit(i, acLen[st]);
+      }
+    } else {
+      for (let pi = 0; pi < patterns.length; pi++) {
+        const v = patterns[pi], f = patternFailures[pi], m = v.length;
+        let k = 0;
+        for (let i = 0; i < n; i++) {
+          const b = bytes[i];
+          while (k > 0 && b !== v[k]) k = f[k - 1];
+          if (b === v[k]) k++;
+          if (k === m) {
+            hit(i, m);
+            k = f[k - 1];
+          }
+        }
+      }
+    }
+    if (raw.length === 0) return raw;
+    raw.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
+    const merged: Array<[number, number]> = [raw[0]];
+    for (let i = 1; i < raw.length; i++) {
+      const last = merged[merged.length - 1];
+      if (raw[i][0] <= last[1]) {
+        if (raw[i][1] > last[1]) last[1] = raw[i][1];
+      } else merged.push(raw[i]);
+    }
+    return merged;
+  };
+  const replaceSpans = (s: string, spans: Array<[number, number]>, marker: string): string => {
+    if (spans.length === 0) return s;
+    let out = "", at = 0;
+    for (const [a, b] of spans) {
+      out += s.slice(at, a) + marker;
+      at = b;
+    }
+    return out + s.slice(at);
+  };
+  const survivors = (s: string): boolean => ordered.some((v) => s.includes(v)) || matchSpans(s).length > 0;
   // KMP failure functions, computed once per variant when the redactor is
   // built; matching itself allocates nothing.
   const failures = ordered.map((v) => {
@@ -461,10 +645,11 @@ export function makeRedactor(secrets: string | string[]): Redactor {
     }
   };
   const redact = (s: string): string => {
-    let out = s;
+    const spans = matchSpans(s);
+    let out = replaceSpans(s, spans, PASSWORD_REDACTED);
     for (const v of ordered) out = out.split(v).join(PASSWORD_REDACTED);
     if (survivors(out)) {
-      out = s;
+      out = replaceSpans(s, spans, blocker);
       for (const v of ordered) out = out.split(v).join(blocker);
     }
     return out;
@@ -487,7 +672,8 @@ export function makeRedactor(secrets: string | string[]): Redactor {
   // still theoretically form a variant; that final case renders the single
   // blocker character, which no variant contains.
   const redactCapped = (s: string, visible: number): string => {
-    let count = 0;
+    const mspans = matchSpans(s);
+    let count = mspans.length;
     for (let vi = 0; vi < ordered.length; vi++) scan(ordered[vi], failures[vi], s, () => { count++; });
     if (count === 0) return s.slice(0, visible);
     // Difference-array coverage: each occurrence adds +1 at its start and -1
@@ -495,6 +681,10 @@ export function makeRedactor(secrets: string | string[]): Redactor {
     // overlapping occurrence is recorded in O(1), so a hostile
     // self-repeating echo costs linear work, never a fill per match.
     const diff = new Int32Array(s.length + 1);
+    for (const [a, b] of mspans) {
+      diff[a]++;
+      diff[b]--;
+    }
     for (let vi = 0; vi < ordered.length; vi++) scan(ordered[vi], failures[vi], s, (a, b) => { diff[a]++; diff[b]--; });
     const mask = new Uint8Array(s.length);
     let run = 0;
@@ -531,7 +721,7 @@ export function makeRedactor(secrets: string | string[]): Redactor {
     }
     return value;
   };
-  return { redact, redactDeep, redactCapped, maxVariantLength: ordered[0]?.length ?? 0 };
+  return { redact, redactDeep, redactCapped, maxVariantLength: Math.max(ordered[0]?.length ?? 0, ...patterns.map((p) => p.length * 3)) };
 }
 
 /** Reads a secret from an arbitrary local path (CLI only; the caller is human). */
