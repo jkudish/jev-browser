@@ -4,6 +4,7 @@
 // and is redacted from every model-facing and serialized output. It must
 // never appear in argv, tool arguments, the task, model context, traces,
 // screenshots, or error messages.
+import { domainToUnicode } from "node:url";
 import { chmod, lstat, mkdir, open, readFile, realpath, unlink } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { homedir } from "node:os";
@@ -293,6 +294,45 @@ function normalizeEcho(s: string): string {
 }
 
 /**
+ * Every form the WHATWG URL parser can produce from `secret` when it is placed in a URL component.
+ * Derived by round-tripping through `new URL()` with ASCII sentinels (which no encode set touches)
+ * around the secret, so the result tracks the platform's encode sets instead of a hand-kept list.
+ * Not covered: mixed-case percent-hex within a single string, double encoding, and non-URL encodings.
+ */
+export function urlComponentForms(secret: string): string[] {
+  const out = new Set<string>();
+  const L = "zqjxa", R = "zqjxb";
+  const between = (s: string): void => {
+    const i = s.indexOf(L), j = s.lastIndexOf(R);
+    if (i >= 0 && j > i) out.add(s.slice(i + L.length, j));
+  };
+  const attempts: Array<() => void> = [
+    () => { const u = new URL("https://example.com/"); u.username = L + secret + R; between(u.username); },
+    () => { const u = new URL("https://example.com/"); u.password = L + secret + R; between(u.password); },
+    () => { const u = new URL("https://example.com/"); u.pathname = "/" + L + secret + R; between(u.pathname); },
+    () => { const u = new URL("https://example.com/"); u.search = "?" + L + secret + R; between(u.search); },
+    () => { const u = new URL("https://example.com/"); u.hash = "#" + L + secret + R; between(u.hash); },
+    () => { const u = new URL("custom://example.com/"); u.search = "?" + L + secret + R; between(u.search); },
+    () => { between(new URL("data:" + L + secret + R).pathname); },
+    () => { between(new URL("https://example.com/?q=" + L + secret + R).search); },
+    () => { between(new URL("https://example.com/#" + L + secret + R).hash); },
+    () => { between(new URL("https://example.com/" + L + secret + R).pathname); },
+    () => { between(new URL("https://" + L + secret + R + "@example.com/").username); },
+    () => {
+      // Host: the secret is the whole label sequence (IDNA mapping, lowercasing, punycode).
+      const h = new URL("http://" + secret + "/");
+      out.add(h.hostname);
+      out.add(domainToUnicode(h.hostname));
+    },
+  ];
+  for (const attempt of attempts) {
+    try { attempt(); } catch { /* the parser rejects this placement; the other components still apply */ }
+  }
+  out.delete("");
+  return Array.from(out);
+}
+
+/**
  * Per-run redactor covering the representations a page can echo back: the
  * raw value(s), their percent-encoded forms (URLs), and their HTML-entity
  * forms. Accepts one secret (the password value) or several (the password
@@ -317,6 +357,16 @@ export function makeRedactor(secrets: string | string[]): Redactor {
     variants.add(new URLSearchParams({ x: secret }).toString().slice(2));
     // Servers and proxies sometimes lowercase the percent hex; match that form.
     variants.add(new URLSearchParams({ x: secret }).toString().slice(2).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase()));
+    // Browser-normalised URL forms. Rather than hand-picking encodings, put the secret into each
+    // component of a URL, let the WHATWG parser serialise it (userinfo, path, query for special and
+    // non-special schemes, fragment, opaque path, host with lowercasing/IDNA/punycode), and take back
+    // what the parser produced between sentinels. Percent-hex is emitted in both cases because
+    // proxies and servers re-case it.
+    for (const form of urlComponentForms(secret)) {
+      variants.add(form);
+      variants.add(form.replace(/%[0-9A-Fa-f]{2}/g, (m) => m.toUpperCase()));
+      variants.add(form.replace(/%[0-9A-Fa-f]{2}/g, (m) => m.toLowerCase()));
+    }
     // HTML entity encodings: the full named-attribute form, the partial
     // serializations real DOM APIs produce (textContent escapes only & and <;
     // attribute serialization escapes & < > " '), and numeric references.

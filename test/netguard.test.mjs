@@ -677,10 +677,13 @@ test("navigate: pre-aborted caller signal with a literal-IP start URL stops befo
 });
 
 // A plain-HTTP origin that answers an ordinary request with an unsolicited 101 (Node emits 'upgrade' on the
-// ClientRequest, never the response callback) or closes before any response must fail only that request.
+// ClientRequest, never the response callback) must fail only that request. The second case is a GUARD, not a
+// reproduction of the request 'close' fallback: when the origin drops the socket, Node emits 'error' ("socket
+// hang up") before 'close', so the 'error' handler is what fails the request here. The 'close' fallback is
+// defence in depth for a close with no preceding 'error', which Node does not produce for a plain origin drop.
 for (const [label, reply] of [
   ["unsolicited 101 Switching Protocols", "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"],
-  ["close before any response", null],
+  ["origin drop before any response (guard)", null],
 ]) {
   test(`proxy HTTP: ${label} from the origin fails fast and the proxy keeps serving`, async () => {
     const errors = [];

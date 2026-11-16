@@ -1774,3 +1774,61 @@ test("cli: a malformed start URL with a password file leaves the password out of
   assert.ok(out.length > 0, "an error line is printed");
   assert.ok(!out.includes(PRE_SECRET), `leaked: ${out}`);
 });
+
+// Browser-normalised forms of a secret (percent-encoding per URL component, hex case, lowercased/IDNA host).
+test("redactor covers per-component WHATWG URL forms of the secret", () => {
+  const secret = "p@ss word!xyz12";
+  const { redact, redactDeep } = makeRedactor(secret);
+  const u = new URL("http://127.0.0.1:9/");
+  u.search = "?t=" + secret;
+  const normalizedQuery = u.search.slice(3); // what Playwright errors and final_url carry
+  assert.ok(normalizedQuery.includes("%20") && normalizedQuery.includes("@"), normalizedQuery);
+  const forms = [
+    normalizedQuery,
+    encodeURIComponent(secret),
+    new URL("http://x/").pathname && (() => { const p = new URL("http://x/"); p.pathname = "/" + secret; return p.pathname.slice(1); })(),
+    (() => { const p = new URL("http://x/"); p.hash = "#" + secret; return p.hash.slice(1); })(),
+    (() => { const p = new URL("http://x/"); p.username = secret; return p.username; })(),
+    (() => { const p = new URL("http://x/"); p.password = secret; return p.password; })(),
+  ];
+  for (const f of forms) {
+    for (const variant of [f, f.replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase())]) {
+      const out = redact(`error at http://h/?t=${variant}&z=1`);
+      assert.ok(!out.includes(variant), `survived: ${variant}`);
+      assert.ok(out.includes(PASSWORD_REDACTED));
+    }
+  }
+  assert.ok(!JSON.stringify(redactDeep({ final_url: "http://127.0.0.1:9/?t=" + normalizedQuery })).includes(normalizedQuery));
+});
+
+test("redactor covers the lowercased, IDNA and punycode host forms of the secret", () => {
+  const { redact } = makeRedactor("Pre-Redactor-Secret-123");
+  assert.ok(!redact("DNS failed for pre-redactor-secret-123.invalid").includes("pre-redactor-secret-123"));
+  const idn = makeRedactor("Bücher-Secret1");
+  assert.ok(!idn.redact("host xn--bcher-secret1-wob.invalid").includes("xn--bcher-secret1-wob"));
+  assert.ok(!idn.redact("host bücher-secret1.invalid").includes("bücher-secret1"));
+});
+
+test("redactor keeps the minimum-length rule for derived URL forms and leaves unrelated text alone", () => {
+  const { redact } = makeRedactor("Ab");
+  assert.equal(redact("ab Ab AB?q=Ab#Ab"), "ab Ab AB?q=Ab#Ab"); // every derived form stays below MIN_SECRET_CHARS
+  const real = makeRedactor("Secret-Value-77");
+  assert.equal(real.redact("nothing to see https://example.com/path?q=1"), "nothing to see https://example.com/path?q=1");
+});
+
+test("navigate: a secret used as the start-URL host is redacted in its lowercased form in the error", async () => {
+  const pw = "Pre-Redactor-Secret-123";
+  const r = await navigate({
+    task: "x",
+    startUrl: "https://" + pw + ".invalid/",
+    maxSeconds: 5,
+    screenshot: "none",
+    password: { value: pw, origin: "https://example.com" },
+    resolver: async () => {
+      throw new Error("nx");
+    },
+  });
+  assert.equal(r.status, "error");
+  const blob = JSON.stringify(r);
+  assert.ok(!blob.includes(pw) && !blob.includes(pw.toLowerCase()), blob);
+});
