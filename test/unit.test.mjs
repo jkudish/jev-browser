@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import {
@@ -2111,3 +2112,64 @@ test("redactor matcher: matches the whole-input reference on the KMP fallback pa
     }
   }
 });
+
+// ── Redactor matcher: spans coalesce as matches are reported ────────────────────────────────────
+test("redactor matcher: densely overlapping echoes do not allocate per match", () => {
+  // 'a' x 2M against the pattern 'aaaa' reports ~2M overlapping matches that all merge into one
+  // span. The child runs with a heap cap that a per-match [start, end] pair (~2M small arrays plus
+  // the sort) cannot fit in, but the single coalesced span easily does.
+  const dist = new URL("../dist/password.js", import.meta.url).href;
+  const script = `
+    import { makeRedactor } from ${JSON.stringify(dist)};
+    const out = makeRedactor("aaaa").redact("a".repeat(2_000_000) + "%");
+    if (out.length !== 11 || out.includes("a")) { console.error("bad output " + out.length); process.exit(2); }
+  `;
+  const r = spawnSync(process.execPath, ["--max-old-space-size=32", "--input-type=module", "-e", script], { encoding: "utf8" });
+  assert.equal(r.status, 0, `child exited ${r.status} signal ${r.signal}: ${(r.stderr || "").slice(0, 300)}`);
+});
+
+// Pattern sets where one secret is a prefix, suffix or infix of another, plus touching secrets.
+const COALESCE_SETS = [
+  ["aaaa"],
+  ["aaaa", "aaaaa", "aaaaaaaa"], // dense self-overlap, nested lengths
+  ["abcdef", "abcd", "cdef", "bcde", "abcdefgh", "cdefgh"], // prefix, suffix, infix, nested
+  ["abcd", "efgh", "cdef"], // "abcdefgh": abcd/efgh touch end-to-start, cdef overlaps both
+  ["abcab", "cabca", "abcabcab", "bcabc"],
+  ["日本語x", "本語xy", "日本語xy", "x\u{1f600}yz"],
+];
+const coalesceInput = (rnd, pats) => {
+  const alphabet = [...new Set(pats.flatMap((p) => [...p]))];
+  let out = "";
+  const len = 1 + Math.floor(rnd() * 30);
+  for (let i = 0; i < len; i++) {
+    const r = rnd();
+    if (r < 0.3) out += encodeForm(rnd, pats[Math.floor(rnd() * pats.length)]);
+    else if (r < 0.9) out += encodeForm(rnd, alphabet[Math.floor(rnd() * alphabet.length)]);
+    else out += junk[Math.floor(rnd() * junk.length)];
+  }
+  return out.includes("%") ? out : out + "%41";
+};
+
+for (const [label, filler] of [["Aho-Corasick", []], ["KMP fallback", ["zq" + "y".repeat(17_000)]]]) {
+  test(`redactor matcher: coalesced spans match the sort-and-merge reference on overlapping, touching and nested echoes (${label})`, () => {
+    const rnd = prng(2024);
+    let withMatch = 0, checked = 0;
+    for (const set of COALESCE_SETS) {
+      const pats = [...set, ...filler];
+      const red = makeRedactor(pats);
+      const inputs = [];
+      for (let i = 0; i < 400; i++) inputs.push(coalesceInput(rnd, set));
+      // Dense runs: every pattern character repeated, including a fully matching tail.
+      for (const p of set) for (let k = 0; k < 24; k++) inputs.push(encodeForm(rnd, p.repeat(1 + (k % 6)) + p.slice(0, k % p.length)) + "%41");
+      for (let k = 1; k <= 40; k++) inputs.push("a".repeat(k) + "%" + "a".repeat(k % 7));
+      for (const p of set) for (const q of set) inputs.push(encodeForm(rnd, p + q.slice(1)) + "%41", encodeForm(rnd, p.slice(1) + q.slice(0, -1)) + "%41");
+      for (const s of inputs) {
+        const want = oracleRedact(s, pats);
+        assert.equal(red.redact(s), want, `set ${JSON.stringify(set)} input ${JSON.stringify(s)}`);
+        checked++;
+        if (want !== s) withMatch++;
+      }
+    }
+    assert.ok(checked > 2500 && withMatch > 1000, `checked ${checked}, with matches ${withMatch}`);
+  });
+}

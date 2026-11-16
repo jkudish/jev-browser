@@ -531,12 +531,26 @@ export function makeRedactor(secrets: string | string[]): Redactor {
   const ringStart = new Int32Array(ringSize);
   const ringFirst = new Uint8Array(ringSize);
   const kmpState = new Int32Array(patterns.length);
-  let raw: Array<[number, number]> = [];
+  // Merged spans so far as a flat [start0, end0, start1, end1, ...] stack, strictly increasing and
+  // disjoint (touching spans are merged), so memory is O(merged spans), not O(matches).
+  let merged: number[] = [];
   let n = 0; // decoded bytes emitted so far
   let st = 0; // Aho-Corasick state
   // Feeds one decoded byte of the text unit starting at `start` (ending at `end`). A match must
   // begin on a unit's first byte and end on a unit's last byte (always true for valid UTF-8
   // patterns; the check keeps a malformed stream from yielding a half-character span).
+  // Reports a match [a, e). Matches arrive with non-decreasing end, but starts are not monotonic (a
+  // longer pattern ending later can start earlier): absorb every stacked span it touches or overlaps.
+  const report = (a: number, e: number): void => {
+    let top = merged.length;
+    while (top > 0 && merged[top - 1] >= a) {
+      if (merged[top - 2] < a) a = merged[top - 2];
+      if (merged[top - 1] > e) e = merged[top - 1];
+      top -= 2;
+    }
+    merged.length = top;
+    merged.push(a, e);
+  };
   const emit = (b: number, start: number, first: number, last: boolean, end: number): void => {
     const i = n++;
     const slot = i & ringMask;
@@ -549,7 +563,7 @@ export function makeRedactor(secrets: string | string[]): Redactor {
       const m = acLen[st];
       if (m > 0 && last) {
         const a = (i - m + 1) & ringMask;
-        if (ringFirst[a] === 1) raw.push([ringStart[a], end]);
+        if (ringFirst[a] === 1) report(ringStart[a], end);
       }
     } else {
       for (let pi = 0; pi < patterns.length; pi++) {
@@ -562,7 +576,7 @@ export function makeRedactor(secrets: string | string[]): Redactor {
         if (k === m) {
           if (last) {
             const a = (i - m + 1) & ringMask;
-            if (ringFirst[a] === 1) raw.push([ringStart[a], end]);
+            if (ringFirst[a] === 1) report(ringStart[a], end);
           }
           k = f[k - 1];
         }
@@ -574,7 +588,7 @@ export function makeRedactor(secrets: string | string[]): Redactor {
   const matchSpans = (s: string): Array<[number, number]> => {
     if (patterns.length === 0 || s.indexOf("%") < 0) return [];
     const len = s.length;
-    raw = [];
+    merged = [];
     n = 0;
     st = 0;
     kmpState.fill(0);
@@ -607,18 +621,11 @@ export function makeRedactor(secrets: string | string[]): Redactor {
         i++;
       }
     }
-    const found = raw;
-    raw = [];
-    if (found.length === 0) return found;
-    found.sort((x, y) => x[0] - y[0] || y[1] - x[1]);
-    const merged: Array<[number, number]> = [found[0]];
-    for (let i = 1; i < found.length; i++) {
-      const last = merged[merged.length - 1];
-      if (found[i][0] <= last[1]) {
-        if (found[i][1] > last[1]) last[1] = found[i][1];
-      } else merged.push(found[i]);
-    }
-    return merged;
+    const found = merged;
+    merged = [];
+    const spans: Array<[number, number]> = [];
+    for (let i = 0; i < found.length; i += 2) spans.push([found[i], found[i + 1]]);
+    return spans;
   };
   const replaceSpans = (s: string, spans: Array<[number, number]>, marker: string): string => {
     if (spans.length === 0) return s;
